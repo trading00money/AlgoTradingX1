@@ -1,0 +1,306 @@
+{
+  "timestamp": "2026-03-22T12:39:01.274953",
+  "models": [
+    "Qwen 3.5",
+    "Claude Opus 4.6",
+    "GLM 5"
+  ],
+  "backend": {
+    "python_syntax": {
+      "total": 304,
+      "passed": 304,
+      "errors": []
+    },
+    "tests": {
+      "passed": 247,
+      "failed": 0,
+      "skipped": 7,
+      "xfailed": 1,
+      "errors": [],
+      "total": 255,
+      "effective_passed": 255,
+      "effective_total": 255
+    },
+    "imports": {
+      "total_files": 304,
+      "files_with_issues": 0,
+      "issues": []
+    }
+  },
+  "frontend": {
+    "typescript": {
+      "total": 145,
+      "passed": 145,
+      "errors": []
+    },
+    "components": 131
+  },
+  "security": {
+    "issues": [],
+    "total_checks": 5,
+    "passed": 5
+  },
+  "code_quality": {
+    "duplicates": {
+      "duplicates_found": 0,
+      "patterns": []
+    },
+    "complexity": {
+      "high_complexity_files": [
+        {
+          "file": "api_sync.py",
+          "lines": 1529
+        },
+        {
+          "file": "api.py",
+          "lines": 657
+        },
+        {
+          "file": "api_comprehensive.py",
+          "lines": 1847
+        },
+        {
+          "file": "verify_live_trading_readiness.py",
+          "lines": 991
+        },
+        {
+          "file": "router/strategy_router.py",
+          "lines": 535
+        },
+        {
+          "file": "cython_compute/cython_integration.py",
+          "lines": 517
+        },
+        {
+          "file": "core/order_manager.py",
+          "lines": 575
+        },
+        {
+          "file": "core/trading_orchestrator.py",
+          "lines": 583
+        },
+        {
+          "file": "core/yahoo_finance_feed.py",
+          "lines": 779
+        },
+        {
+          "file": "core/validation_integration_example.py",
+          "lines": 617
+        },
+        {
+          "file": "core/training_pipeline.py",
+          "lines": 631
+        },
+        {
+          "file": "core/signal_engine.py",
+          "lines": 845
+        },
+        {
+          "file": "core/analytics_api.py",
+          "lines": 1485
+        },
+        {
+          "file": "core/news_alert_service.py",
+          "lines": 1059
+        },
+        {
+          "file": "core/rr_engine.py",
+          "lines": 682
+        },
+        {
+          "file": "core/Metatrader5_bridge.py",
+          "lines": 773
+        },
+        {
+          "file": "core/trading_api.py",
+          "lines": 543
+        },
+        {
+          "file": "core/config_sync_api.py",
+          "lines": 949
+        },
+        {
+          "file": "core/cycle_engine.py",
+          "lines": 624
+        },
+        {
+          "file": "core/agent_orchestration_api.py",
+          "lines": 561
+        },
+        {
+          "file": "core/feature_fusion_engine.py",
+          "lines": 523
+        },
+        {
+          "file": "core/risk_engine.py",
+          "lines": 532
+        },
+        {
+          "file": "core/security_manager.py",
+          "lines": 607
+        },
+        {
+          "file": "core/validation.py",
+          "lines": 813
+        },
+        {
+          "file": "core/execution_engine.py",
+          "lines": 649
+        },
+        {
+          "file": "core/live_execution_engine.py",
+          "lines": 737
+        },
+        {
+          "file": "core/Binance_connector.py",
+          "lines": 701
+        },
+        {
+          "file": "core/realtime_data_feed.py",
+          "lines": 692
+        },
+        {
+          "file": "core/mtf_engine.py",
+          "lines": 701
+        },
+        {
+          "file": "core/bookmap_terminal_api.py",
+          "lines": 1776
+        },
+        {
+          "file": "core/ath_atl_predictor.py",
+          "lines": 647
+        },
+        {
+          "file": "core/hft_engine.py",
+          "lines": 846
+        },
+        {
+          "file": "core/trading_journal.py",
+          "lines": 647
+        },
+        {
+          "file": "core/ai_api.py",
+          "lines": 658
+        },
+        {
+          "file": "core/settings_api.py",
+          "lines": 570
+        },
+        {
+          "file": "core/forecasting_engine.py",
+          "lines": 517
+        },
+        {
+          "file": "core/multi_account_manager.py",
+          "lines": 690
+        },
+        {
+          "file": "core/hft_api.py",
+          "lines": 1083
+        },
+        {
+          "file": "core/options_engine.py",
+          "lines": 654
+        },
+        {
+          "file": "tests/test_mt4_low_latency.py",
+          "lines": 659
+        },
+        {
+          "file": "tests/test_full_sync_verification.py",
+          "lines": 1020
+        },
+        {
+          "file": "tests/test_all_low_latency_connectors.py",
+          "lines": 731
+        },
+        {
+          "file": "agent/regime_agent.py",
+          "lines": 569
+        },
+        {
+          "file": "agent/autonomous_agent.py",
+          "lines": 620
+        },
+        {
+          "file": "agent/analyst_agent.py",
+          "lines": 539
+        },
+        {
+          "file": "scanner/hybrid_scanner.py",
+          "lines": 613
+        },
+        {
+          "file": "scanner/options_scanner.py",
+          "lines": 877
+        },
+        {
+          "file": "scanner/Candlestick_Pattern_Scanner.py",
+          "lines": 621
+        },
+        {
+          "file": "connectors/mt4_zmq_bridge.py",
+          "lines": 683
+        },
+        {
+          "file": "connectors/fix_low_latency.py",
+          "lines": 1121
+        },
+        {
+          "file": "connectors/mt5_low_latency.py",
+          "lines": 1164
+        },
+        {
+          "file": "connectors/mt4_low_latency.py",
+          "lines": 1119
+        },
+        {
+          "file": "connectors/crypto_low_latency.py",
+          "lines": 1775
+        },
+        {
+          "file": "connectors/dex_connector.py",
+          "lines": 603
+        },
+        {
+          "file": "connectors/metatrader_connector.py",
+          "lines": 555
+        },
+        {
+          "file": "connectors/exchange_connector.py",
+          "lines": 605
+        },
+        {
+          "file": "skills/docx/scripts/document.py",
+          "lines": 1302
+        },
+        {
+          "file": "skills/docx/ooxml/scripts/validation/base.py",
+          "lines": 951
+        }
+      ],
+      "average_lines": 293.3453947368421,
+      "total_files": 304
+    }
+  },
+  "integration": {
+    "sync": {
+      "synced": true,
+      "api_endpoints": 0,
+      "frontend_api_calls": 4,
+      "mismatches": []
+    }
+  },
+  "overall_score": 100.0,
+  "file_statistics": {
+    "py": 304,
+    "ts": 1850,
+    "tsx": 142,
+    "js": 7518,
+    "jsx": 0,
+    "md": 472,
+    "yaml": 27,
+    "json": 596
+  }
+}

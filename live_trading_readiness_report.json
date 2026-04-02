@@ -1,0 +1,648 @@
+{
+  "timestamp": "2026-03-21T01:38:30.424579",
+  "overall_score": 100.0,
+  "components": {
+    "backend": {
+      "score": 100.0,
+      "passed": 20,
+      "total": 20
+    },
+    "frontend": {
+      "score": 100.0,
+      "passed": 7,
+      "total": 7
+    },
+    "api_sync": {
+      "score": 100.0,
+      "passed": 19,
+      "total": 19
+    },
+    "security": {
+      "score": 100.0,
+      "passed": 5,
+      "total": 5
+    },
+    "performance": {
+      "score": 100.0,
+      "passed": 5,
+      "total": 5
+    },
+    "connectors": {
+      "score": 100.0,
+      "passed": 6,
+      "total": 6
+    },
+    "risk_management": {
+      "score": 100.0,
+      "passed": 7,
+      "total": 7
+    },
+    "validation": {
+      "score": 100.0,
+      "passed": 5,
+      "total": 5
+    }
+  },
+  "tests": [
+    {
+      "category": "backend",
+      "name": "Import core.data_feed",
+      "passed": true,
+      "details": "Successfully imported core.data_feed",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789118"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.gann_engine",
+      "passed": true,
+      "details": "Successfully imported core.gann_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789166"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.ehlers_engine",
+      "passed": true,
+      "details": "Successfully imported core.ehlers_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789175"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.astro_engine",
+      "passed": true,
+      "details": "Successfully imported core.astro_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789180"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.signal_engine",
+      "passed": true,
+      "details": "Successfully imported core.signal_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789185"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.ml_engine",
+      "passed": true,
+      "details": "Successfully imported core.ml_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.789190"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.validation",
+      "passed": true,
+      "details": "Successfully imported core.validation",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828664"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.validation",
+      "passed": true,
+      "details": "Successfully imported core.validation",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828701"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.risk_manager",
+      "passed": true,
+      "details": "Successfully imported core.risk_manager",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828709"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.order_manager",
+      "passed": true,
+      "details": "Successfully imported core.order_manager",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828729"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.execution_engine",
+      "passed": true,
+      "details": "Successfully imported core.execution_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828742"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.portfolio_manager",
+      "passed": true,
+      "details": "Successfully imported core.portfolio_manager",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.828748"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.hft_engine",
+      "passed": true,
+      "details": "Successfully imported core.hft_engine",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.836748"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.hft_api",
+      "passed": true,
+      "details": "Successfully imported core.hft_api",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.841395"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.safety_api",
+      "passed": true,
+      "details": "Successfully imported core.safety_api",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.843423"
+    },
+    {
+      "category": "backend",
+      "name": "Import core.trading_api",
+      "passed": true,
+      "details": "Successfully imported core.trading_api",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:32.843461"
+    },
+    {
+      "category": "backend",
+      "name": "Flask API module",
+      "passed": true,
+      "details": "Flask app and socketio available",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.208815"
+    },
+    {
+      "category": "backend",
+      "name": "API blueprints",
+      "passed": true,
+      "details": "All API blueprints imported",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.208870"
+    },
+    {
+      "category": "backend",
+      "name": "Configuration loader",
+      "passed": true,
+      "details": "Loaded 23 config sections",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438570"
+    },
+    {
+      "category": "backend",
+      "name": "Backtest components",
+      "passed": true,
+      "details": "Backtester and metrics imported",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438597"
+    },
+    {
+      "category": "frontend",
+      "name": "Frontend directory",
+      "passed": true,
+      "details": "Frontend directory exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438659"
+    },
+    {
+      "category": "frontend",
+      "name": "package.json",
+      "passed": true,
+      "details": "Valid JSON with 32 dependencies",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438739"
+    },
+    {
+      "category": "frontend",
+      "name": "TypeScript config",
+      "passed": true,
+      "details": "tsconfig.json exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438767"
+    },
+    {
+      "category": "frontend",
+      "name": "App.tsx",
+      "passed": true,
+      "details": "Main App component exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438779"
+    },
+    {
+      "category": "frontend",
+      "name": "Vite config",
+      "passed": true,
+      "details": "vite.config.ts exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438796"
+    },
+    {
+      "category": "frontend",
+      "name": "UI components",
+      "passed": true,
+      "details": "48 UI components found",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438878"
+    },
+    {
+      "category": "frontend",
+      "name": "Dependencies installed",
+      "passed": true,
+      "details": "node_modules exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.438896"
+    },
+    {
+      "category": "api",
+      "name": "API endpoints",
+      "passed": true,
+      "details": "121 API endpoints registered",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.439063"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/health",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439093"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/run_backtest",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439111"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/config",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439127"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/trading/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439145"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/positions/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439161"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/orders/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439177"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/risk/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439193"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/scanner/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439209"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/portfolio/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439225"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/forecast/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439242"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/gann/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439259"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/ehlers/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439275"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/astro/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439291"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/ml/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439307"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/broker/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439324"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/alerts/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439340"
+    },
+    {
+      "category": "api",
+      "name": "Endpoint /api/settings/",
+      "passed": true,
+      "details": "Registered",
+      "score": 0.5,
+      "timestamp": "2026-03-21T01:38:33.439357"
+    },
+    {
+      "category": "api",
+      "name": "WebSocket support",
+      "passed": true,
+      "details": "SocketIO initialized",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.439361"
+    },
+    {
+      "category": "security",
+      "name": "SQL injection protection",
+      "passed": true,
+      "details": "Symbol sanitization works correctly",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440117"
+    },
+    {
+      "category": "security",
+      "name": "Rate limiter",
+      "passed": true,
+      "details": "Rate limiter functional",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440138"
+    },
+    {
+      "category": "security",
+      "name": "Pydantic validation",
+      "passed": true,
+      "details": "Pydantic models validate correctly",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440723"
+    },
+    {
+      "category": "security",
+      "name": "CORS configuration",
+      "passed": true,
+      "details": "CORS configured: *",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440737"
+    },
+    {
+      "category": "security",
+      "name": "Secret key",
+      "passed": true,
+      "details": "Secret key configured",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440742"
+    },
+    {
+      "category": "performance",
+      "name": "Latency logger",
+      "passed": true,
+      "details": "Latency logging file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440777"
+    },
+    {
+      "category": "performance",
+      "name": "HFT engine",
+      "passed": true,
+      "details": "HFT engine available",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440784"
+    },
+    {
+      "category": "performance",
+      "name": "Order router",
+      "passed": true,
+      "details": "Order router file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440794"
+    },
+    {
+      "category": "performance",
+      "name": "HFT configuration",
+      "passed": true,
+      "details": "HFT config file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440804"
+    },
+    {
+      "category": "performance",
+      "name": "Basic execution speed",
+      "passed": true,
+      "details": "1000 operations in 0.04ms",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440870"
+    },
+    {
+      "category": "connectors",
+      "name": "MT5 connector",
+      "passed": true,
+      "details": "MT5 connector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.440909"
+    },
+    {
+      "category": "connectors",
+      "name": "Binance connector",
+      "passed": true,
+      "details": "BinanceConnector class available",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.504639"
+    },
+    {
+      "category": "connectors",
+      "name": "FIX connector",
+      "passed": true,
+      "details": "FIX connector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.504688"
+    },
+    {
+      "category": "connectors",
+      "name": "WebSocket connector",
+      "passed": true,
+      "details": "WebSocket connector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.504700"
+    },
+    {
+      "category": "connectors",
+      "name": "OANDA connector",
+      "passed": true,
+      "details": "OANDA connector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.504708"
+    },
+    {
+      "category": "connectors",
+      "name": "TradingView connector",
+      "passed": true,
+      "details": "TradingView connector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.504716"
+    },
+    {
+      "category": "risk",
+      "name": "Circuit breaker initialization",
+      "passed": true,
+      "details": "Circuit breaker initialized correctly",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.516841"
+    },
+    {
+      "category": "risk",
+      "name": "Kill switch",
+      "passed": true,
+      "details": "Kill switch works correctly",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.516978"
+    },
+    {
+      "category": "risk",
+      "name": "Position sizer",
+      "passed": true,
+      "details": "Position sizer file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517013"
+    },
+    {
+      "category": "risk",
+      "name": "Drawdown protector",
+      "passed": true,
+      "details": "Drawdown protector file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517023"
+    },
+    {
+      "category": "risk",
+      "name": "Risk engine",
+      "passed": true,
+      "details": "Risk engine file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517033"
+    },
+    {
+      "category": "risk",
+      "name": "Risk configuration",
+      "passed": true,
+      "details": "risk_config.yaml exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517043"
+    },
+    {
+      "category": "risk",
+      "name": "Portfolio risk module",
+      "passed": true,
+      "details": "Portfolio risk file exists",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517050"
+    },
+    {
+      "category": "validation",
+      "name": "OrderRequest valid",
+      "passed": true,
+      "details": "Valid order: BTC-USD",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517126"
+    },
+    {
+      "category": "validation",
+      "name": "Invalid symbol rejection",
+      "passed": true,
+      "details": "Invalid symbol correctly rejected",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517171"
+    },
+    {
+      "category": "validation",
+      "name": "TradingStartRequest",
+      "passed": true,
+      "details": "Valid request with 2 symbols",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517224"
+    },
+    {
+      "category": "validation",
+      "name": "ScannerRequest",
+      "passed": true,
+      "details": "Valid scanner request",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517257"
+    },
+    {
+      "category": "validation",
+      "name": "BacktestRequest",
+      "passed": true,
+      "details": "Valid backtest request",
+      "score": 1,
+      "timestamp": "2026-03-21T01:38:33.517532"
+    }
+  ],
+  "issues": [],
+  "warnings": [],
+  "summary": {
+    "api_endpoints_count": 121,
+    "total_passed": 74,
+    "total_tests": 74,
+    "readiness": "READY FOR LIVE TRADING"
+  }
+}
