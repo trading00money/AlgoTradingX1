@@ -40,9 +40,8 @@ class EhlersEngine:
 
         # Create a copy to avoid modifying the original DataFrame
         augmented_data = price_data.copy()
-        # Callers can inspect augmented_data.attrs['failed_indicators'] to see
-        # which indicators were skipped due to errors.
-        augmented_data.attrs['failed_indicators'] = []
+        # Local list survives DataFrame.join() which clears .attrs in many pandas versions.
+        failed = []
 
         # --- Fisher Transform ---
         if "fisher_transform" in self.config:
@@ -53,7 +52,7 @@ class EhlersEngine:
                 logger.debug("Fisher Transform calculated and added.")
             except Exception as e:
                 logger.warning(f"Failed to calculate Fisher Transform: {e}")
-                augmented_data.attrs['failed_indicators'].append('fisher_transform')
+                failed.append('fisher_transform')
 
         # --- MAMA ---
         if "mama" in self.config:
@@ -64,7 +63,7 @@ class EhlersEngine:
                 logger.debug("MAMA indicator calculated and added.")
             except Exception as e:
                 logger.warning(f"Failed to calculate MAMA: {e}")
-                augmented_data.attrs['failed_indicators'].append('mama')
+                failed.append('mama')
 
         # --- Cyber Cycle ---
         if "cyber_cycle" in self.config:
@@ -75,9 +74,10 @@ class EhlersEngine:
                 logger.debug("Cyber Cycle indicator calculated and added.")
             except Exception as e:
                 logger.warning(f"Failed to calculate Cyber Cycle: {e}")
-                augmented_data.attrs['failed_indicators'].append('cyber_cycle')
+                failed.append('cyber_cycle')
 
-        failed = augmented_data.attrs['failed_indicators']
+        # Expose via attrs for callers that inspect it (best-effort; survives copy but not join)
+        augmented_data.attrs['failed_indicators'] = failed
         if failed:
             logger.warning(f"Ehlers indicators skipped due to errors: {failed}")
         else:

@@ -7,6 +7,7 @@ Fetches market data exclusively from configured broker connectors:
 
 No yfinance or public fallback — all data flows through broker connections.
 """
+import os
 import pandas as pd
 import numpy as np
 from loguru import logger
@@ -109,9 +110,13 @@ class DataFeed:
                             ccxt_id = exchange_name.lower()
                             exchange_class = getattr(ccxt, ccxt_id, None)
                             if exchange_class:
+                                # Prefer YAML keys; fall back to env vars (e.g. BINANCE_API_KEY)
+                                env_prefix = exchange_name.upper()
+                                api_key = mode.get('apiKey', '') or os.environ.get(f'{env_prefix}_API_KEY', '')
+                                api_secret = mode.get('apiSecret', '') or os.environ.get(f'{env_prefix}_API_SECRET', '')
                                 config = {
-                                    'apiKey': mode.get('apiKey', ''),
-                                    'secret': mode.get('apiSecret', ''),
+                                    'apiKey': api_key,
+                                    'secret': api_secret,
                                     'enableRateLimit': True,
                                 }
                                 if mode.get('testnet', True):
@@ -178,30 +183,34 @@ class DataFeed:
             source = self._detect_source(symbol)
 
         try:
+            data = None
+
             if source == "metatrader":
-                return self._fetch_from_metatrader(symbol, timeframe, start_date, end_date)
+                data = self._fetch_from_metatrader(symbol, timeframe, start_date, end_date)
             elif source == "exchange":
-                return self._fetch_from_exchange(symbol, timeframe, start_date, end_date)
+                data = self._fetch_from_exchange(symbol, timeframe, start_date, end_date)
             elif source == "fix":
-                return self._fetch_from_fix(symbol, timeframe, start_date, end_date)
+                data = self._fetch_from_fix(symbol, timeframe, start_date, end_date)
             elif source == "yfinance":
                 return self._fetch_from_yfinance(symbol, timeframe, start_date, end_date)
             else:
-                # Try all sources in order, with yfinance as the final fallback
+                # Try all broker sources first
                 for src in ["metatrader", "exchange", "fix"]:
                     data = self._try_fetch(src, symbol, timeframe, start_date, end_date)
                     if data is not None and not data.empty:
                         return data
 
-                # yfinance fallback — works for crypto, forex, stocks, indices
+            # Fall back to yfinance if broker source returned nothing
+            if data is None or (hasattr(data, 'empty') and data.empty):
                 if YFINANCE_AVAILABLE:
-                    logger.info(f"No broker connector returned data for {symbol}. Trying yfinance fallback...")
+                    logger.info(f"No broker data for {symbol}. Trying yfinance fallback...")
                     data = self._fetch_from_yfinance(symbol, timeframe, start_date, end_date)
-                    if data is not None and not data.empty:
-                        return data
 
+            if data is None or (hasattr(data, 'empty') and data.empty):
                 logger.warning(f"No data available for {symbol} from any source.")
                 return None
+
+            return data
 
         except Exception as e:
             logger.error(f"An error occurred while fetching historical data for {symbol}: {e}")

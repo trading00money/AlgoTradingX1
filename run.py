@@ -2,6 +2,9 @@ import argparse
 import yaml
 from loguru import logger
 from typing import Dict
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 # Import core components
 from core.data_feed import DataFeed
@@ -13,7 +16,7 @@ from core.signal_engine import AISignalEngine
 from backtest.backtester import Backtester
 from backtest.metrics import calculate_performance_metrics
 import json
-import os
+
 
 # Get the absolute path of the directory containing run.py
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -50,12 +53,12 @@ def run_backtest(config: Dict):
     # For now, we'll hardcode a symbol and date range for testing.
     # In a real scenario, this would be driven by the backtest config.
     symbol = "BTC/USDT"
-    start_date = "2022-01-01"
-    end_date = "2023-01-01"
+    start_date = "2024-01-01"
+    end_date = "2025-01-01"
 
     price_data = data_feed.get_historical_data(
         symbol=symbol,
-        timeframe="1d",
+        timeframe="1h",
         start_date=start_date,
         end_date=end_date
     )
@@ -102,9 +105,117 @@ def run_backtest(config: Dict):
     logger.success("Backtest run finished.")
 
 
-def run_live():
-    """Orchestrates the live trading process."""
-    logger.info("Live trading mode is not yet implemented.")
+def run_live(config: Dict):
+    """Orchestrates the live trading process via TradingOrchestrator."""
+    import asyncio
+    import signal as _signal
+    from core.trading_orchestrator import TradingOrchestrator
+
+    logger.info("--- Starting Live Trading Mode ---")
+
+    # Build orchestrator config from loaded configs
+    broker_cfg = config.get('broker_config', {})
+    strategy_cfg = config.get('strategy_config', {})
+
+    # Collect symbols from enabled trading modes.
+    # Each mode uses 'selectedInstrument' (single symbol) or 'symbols' (list).
+    symbols = []
+    for mode in broker_cfg.get('trading_modes', []):
+        if not mode.get('enabled', True):
+            continue
+        for sym in mode.get('symbols', []):
+            if sym and sym not in symbols:
+                symbols.append(sym)
+        instrument = mode.get('selectedInstrument', '')
+        if instrument and instrument not in symbols:
+            symbols.append(instrument)
+    if not symbols:
+        symbols = ["BTC/USDT"]
+        logger.warning("No symbols found in broker_config. Defaulting to BTC/USDT.")
+
+    # Timeframes from strategy config or default
+    timeframes = strategy_cfg.get('timeframes', ['1h'])
+    scan_interval = strategy_cfg.get('scan_interval_seconds', 60)
+
+    # Inject exchange connectors into the data feed singleton before the
+    # orchestrator starts, so subscribe_ticks() has something to talk to.
+    try:
+        from core.realtime_data_feed import get_data_feed
+        from core.Binance_connector import BinanceConnector
+        data_feed = get_data_feed()
+        for mode in broker_cfg.get('trading_modes', []):
+            if mode.get('exchange', '').lower() == 'binance' and mode.get('enabled', True):
+                connector = BinanceConnector({
+                    'api_key': os.environ.get('BINANCE_API_KEY', mode.get('apiKey', '')),
+                    'api_secret': os.environ.get('BINANCE_API_SECRET', mode.get('apiSecret', '')),
+                    'testnet': mode.get('testnet', False),
+                })
+                data_feed.add_exchange_connector('binance', connector)
+                logger.info("Binance connector injected into data feed.")
+                break
+    except Exception as e:
+        logger.warning(f"Could not initialize Binance connector for data feed: {e}")
+
+    # Pre-initialise the execution gate singleton with the configured mode
+    # before the orchestrator calls get_execution_gate() with no args.
+    execution_cfg = strategy_cfg.get('execution', {})
+    try:
+        from core.execution_gate import get_execution_gate
+        get_execution_gate(config=execution_cfg)
+        logger.info(
+            f"Execution gate: mode={execution_cfg.get('trading_mode', 'manual')}, "
+            f"paper={execution_cfg.get('paper_trading', True)}"
+        )
+    except Exception as e:
+        logger.warning(f"Could not pre-configure execution gate: {e}")
+
+    orchestrator_cfg = {
+        'symbols': symbols,
+        'timeframes': timeframes,
+        'scan_interval': scan_interval,
+        **config,  # pass all configs through for sub-components
+    }
+
+    orchestrator = TradingOrchestrator(orchestrator_cfg)
+
+    async def _run():
+        started = await orchestrator.start()
+        if not started:
+            logger.error("Orchestrator failed to start. Aborting live trading.")
+            return
+
+        logger.success(f"Live trading running — symbols: {symbols}, timeframes: {timeframes}")
+        logger.info("Press Ctrl+C to stop.")
+
+        # Block until a shutdown signal is received
+        stop_event = asyncio.Event()
+
+        def _handle_sigint():
+            logger.warning("Shutdown signal received. Stopping...")
+            stop_event.set()
+
+        loop = asyncio.get_event_loop()
+        try:
+            loop.add_signal_handler(_signal.SIGINT, _handle_sigint)
+            loop.add_signal_handler(_signal.SIGTERM, _handle_sigint)
+        except NotImplementedError:
+            # Windows does not support add_signal_handler; fall back to KeyboardInterrupt
+            pass
+
+        try:
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+        except KeyboardInterrupt:
+            logger.warning("KeyboardInterrupt received. Stopping...")
+        finally:
+            await orchestrator.stop()
+            logger.success("Live trading stopped cleanly.")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        logger.warning("Interrupted before event loop started.")
 
 def main():
     """
@@ -127,9 +238,14 @@ def main():
         'gann_config': load_config('gann_config.yaml'),
         'risk_config': load_config('risk_config.yaml'),
         'backtest_config': load_config('backtest_config.yaml'),
+        'ml_config': load_config('ml_config.yaml'),
+        'ehlers_config': load_config('ehlers_config.yaml'),
+        'astro_config': load_config('astro_config.yaml'),
     }
 
-    if not all(config.values()):
+    # Non-critical configs (missing is OK — engines handle absence gracefully)
+    _optional_keys = {'ehlers_config', 'astro_config'}
+    if not all(v for k, v in config.items() if k not in _optional_keys):
         logger.error("One or more configuration files failed to load. Exiting.")
         return
 
@@ -142,7 +258,7 @@ def main():
     elif args.mode == "trainer":
         run_trainer(config)
     elif args.mode == "live":
-        run_live()
+        run_live(config)
     else:
         logger.warning(f"Mode '{args.mode}' is not yet implemented.")
 

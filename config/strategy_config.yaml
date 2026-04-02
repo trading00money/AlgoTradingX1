@@ -370,3 +370,14 @@ emergency:
   fallback_mode:
     enabled: true
     strategy: "close_all_positions"  # close_all | reduce_exposure | hedge
+
+# ================================================================
+# EXECUTION GATE
+# ================================================================
+execution:
+  # manual        → signals queue for human approval, never auto-execute
+  # ai_assisted   → signals queue but flagged with AI recommendation
+  # ai_full_auto  → signals execute automatically after risk check
+  # paper_trading → simulate execution only (no real orders)
+  trading_mode: "paper_trading"   # change to "ai_full_auto" for live orders
+  paper_trading: true             # set false only when ready for real money

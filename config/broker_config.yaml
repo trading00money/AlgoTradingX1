@@ -43,10 +43,10 @@ trading_modes:
     brokerType: "crypto_exchange"
     exchange: "binance"
     endpoint: "https://api.binance.com"
-    apiKey: ""
-    apiSecret: ""
+    apiKey: "i1c9h97KtRB2pS0svQ1aU8IGBqqHfctTDVx0lPJD5dcD3mpk29sy370LTm8z9bN6"
+    apiSecret: "10H7kKJ80b2S5KfTdOEn2iM3UsIQroVfblCFEr8nSdWsmnYP5NNzwnplvNbhq0xD"
     passphrase: ""
-    testnet: true
+    testnet: false
     brokerConnected: false
     mtType: ""
     mtServer: ""
@@ -121,10 +121,10 @@ trading_modes:
     brokerType: "crypto_exchange"
     exchange: "binance"
     endpoint: "https://fapi.binance.com"
-    apiKey: ""
-    apiSecret: ""
+    apiKey: "i1c9h97KtRB2pS0svQ1aU8IGBqqHfctTDVx0lPJD5dcD3mpk29sy370LTm8z9bN6"
+    apiSecret: "10H7kKJ80b2S5KfTdOEn2iM3UsIQroVfblCFEr8nSdWsmnYP5NNzwnplvNbhq0xD"
     passphrase: ""
-    testnet: true
+    testnet: false
     brokerConnected: false
     mtType: ""
     mtServer: ""

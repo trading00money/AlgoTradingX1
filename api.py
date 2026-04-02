@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -699,19 +702,18 @@ def broadcast_message():
         logger.error(f"Failed to broadcast message: {e}")
         return jsonify({"error": str(e)}), 500
 
-
 if __name__ == '__main__':
-    logger.info("Starting Gann Quant AI Flask API server with WebSocket support...")
+    host = os.environ.get('FLASK_HOST', '0.0.0.0')
+    port = int(os.environ.get('FLASK_PORT', 5000))
+    debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+
+    logger.info(f"Starting Gann Quant AI API server on {host}:{port}...")
     logger.info(f"Registered routes: {len(app.url_map._rules)} endpoints")
-    logger.info("WebSocket server enabled on the same port")
-    
-    # Note: For development, this is fine. For production, use a proper WSGI server like Gunicorn
-    # with eventlet or gevent for WebSocket support.
-    # Example: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:5000 api:app
-    
-    # Production mode detection
-    debug_mode = os.environ.get('FLASK_DEBUG', 'true').lower() == 'true'
-    if not debug_mode:
-        logger.info("Running in PRODUCTION mode")
-    
-    socketio.run(app, host="0.0.0.0", port=5000, debug=debug_mode, allow_unsafe_werkzeug=debug_mode)
+
+    if debug_mode:
+        logger.warning("Running in DEBUG mode (development only)")
+        socketio.run(app, host=host, port=port, debug=True, allow_unsafe_werkzeug=True)
+    else:
+        from waitress import serve
+        logger.info("Running in PRODUCTION mode via Waitress")
+        serve(app, host=host, port=port, threads=8)

@@ -310,9 +310,11 @@ class MultiAccountManager:
             if account.broker_type == BrokerType.CRYPTO_EXCHANGE:
                 from connectors.exchange_connector import ExchangeConnectorFactory, ExchangeCredentials
                 
+                import os
+                env_prefix = account.exchange.upper()
                 creds = ExchangeCredentials(
-                    api_key=credentials.get('api_key', ''),
-                    api_secret=credentials.get('api_secret', ''),
+                    api_key=credentials.get('api_key', '') or os.environ.get(f'{env_prefix}_API_KEY', ''),
+                    api_secret=credentials.get('api_secret', '') or os.environ.get(f'{env_prefix}_API_SECRET', ''),
                     passphrase=credentials.get('passphrase', ''),
                     testnet=not account.is_live
                 )

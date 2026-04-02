@@ -7,6 +7,27 @@
 version: "3.0.0"
 
 # ================================================================
+# ACTIVE MODEL SELECTION
+# ================================================================
+active_model: "ml_randomforest"  # ml_randomforest | ml_xgboost | ml_lstm
+
+model_paths:
+  ml_randomforest: "models/random_forest.pkl"
+  ml_xgboost: "models/xgboost_classifier.json"
+  ml_lstm: "models/lstm_price_predictor.h5"
+
+# Random forest params passed to RandomForestClassifier
+training:
+  random_forest_params:
+    n_estimators: 300
+    max_depth: 20
+    min_samples_split: 10
+    min_samples_leaf: 5
+    max_features: "sqrt"
+    n_jobs: -1
+    random_state: 42
+
+# ================================================================
 # MODEL ENSEMBLE
 # ================================================================
 ensemble:

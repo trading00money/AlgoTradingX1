@@ -92,10 +92,11 @@ class RandomForestModel:
 
     def load_model(self):
         """Loads a pre-trained model from the specified path."""
+        if not self.model_path:
+            raise RuntimeError("No model path configured. Train the model first using 'python run.py trainer'.")
         try:
             logger.info(f"Loading model from {self.model_path}...")
             self.model = joblib.load(self.model_path)
             logger.success("Model loaded successfully.")
         except FileNotFoundError:
-            logger.error(f"Model file not found at {self.model_path}.")
-            self.model = None
+            raise RuntimeError(f"Model file not found at '{self.model_path}'. Train the model first using 'python run.py trainer'.")
