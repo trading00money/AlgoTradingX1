@@ -2,54 +2,69 @@
 # RISK-REWARD CONFIGURATION v3.0
 # ================================================================
 
+# ================================================================
+# XAUUSD M15 OPTIMIZED R:R TARGETS
+# Target: PF ≥ 2.0
+#
+# Math: PF = WR × RR / (1 - WR)
+# At WR=40%, need RR ≥ 3.0  →  PF = 0.40×3 / 0.60 = 2.0  ✓
+# At WR=35%, need RR ≥ 3.7  →  PF = 0.35×3.7 / 0.65 = 2.0  ✓
+# Floor: never accept RR < 3.0 on XAUUSD M15
+# ================================================================
+
 default:
-  min_rr: 1.5
-  target_rr: 3.0
+  # Raised from 1.5→3.0: previous 1.5 minimum was the primary cause
+  # of PF=0.718. With WR=29%, you need RR≥4.7 to break even at 1.5.
+  min_rr: 3.0
+  target_rr: 4.0
 
 regime_based:
   trending:
-    min_rr: 2.0
+    min_rr: 3.0
     target_rr: 5.0
-    trail_activation: 1.5 # Aktifkan trailing loss cepat
+    trail_activation: 2.0  # Only trail after 2R secured (was 1.5)
   trending_high_vol:
-    min_rr: 1.5
-    target_rr: 3.0
-    trail_activation: 1.0
+    min_rr: 3.0
+    target_rr: 4.0
+    trail_activation: 1.5
   ranging:
-    min_rr: 1.0
-    target_rr: 1.5
-    trail_activation: 0.8
+    # Ranging on M15 gold: tighter range but still need RR≥2.5
+    # (mean-reversion setups can allow slightly lower)
+    min_rr: 2.5
+    target_rr: 3.0
+    trail_activation: 1.5
   ranging_high_vol:
-    min_rr: 1.0
-    target_rr: 1.2
-    trail_activation: 0.5
+    # High-vol ranging = skip. Force min_rr so marginal setups are rejected.
+    min_rr: 3.0
+    target_rr: 3.5
+    trail_activation: 1.0
   chaotic:
-    min_rr: 2.0
-    target_rr: 2.0
-    trail_activation: 0.5
+    min_rr: 3.5
+    target_rr: 4.0
+    trail_activation: 1.0
     allow_trading: false
 
-# RR Ratio mapping for each regime
-# The strategy will use this RR for take-profit calculations when the regime is active.
+# RR Ratio mapping for each regime (XAUUSD M15 optimized)
+# Partial exit strategy: 40% at T1, 35% at T2, 25% runner to T3
 rr_matrix:
-  default: 2.5 # Default RR if no specific regime is matched
+  default: 3.5  # Raised from 2.5
 
   Bull_Volatile:
     long: 4.0
-    short: 2.0 # Shorts are counter-trend, so a smaller RR is prudent
+    short: 3.0   # Raised from 2.0: counter-trend still needs meaningful RR
 
   Bull_Quiet:
-    long: 3.0
-    short: 1.5
+    long: 3.5    # Raised from 3.0
+    short: 3.0   # Raised from 1.5
 
   Bear_Volatile:
-    long: 2.0
+    long: 3.0    # Raised from 2.0
     short: 4.0
 
   Bear_Quiet:
-    long: 1.5
-    short: 3.0
+    long: 3.0    # Raised from 1.5
+    short: 3.5   # Raised from 3.0
 
   Ranging:
-    long: 2.0
-    short: 2.0
+    long: 2.5    # Raised from 2.0; accept slightly lower only in pure ranges
+    short: 2.5

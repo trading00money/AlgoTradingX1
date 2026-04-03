@@ -372,8 +372,9 @@ def run_backtest_endpoint():
         except ValueError as e:
             logger.warning(f"ML engine unavailable — skipping: {e}")
 
-        # generate_signals_sync() is the synchronous entry point; never returns a coroutine.
-        signals = signal_engine.generate_signals_sync(data_with_indicators, gann_levels, astro_events)
+        # Backtests must use the vectorized backtest signal generator so cooldown/threshold
+        # logic is applied consistently (generate_signals_sync() returns a single AISignal row).
+        signals = signal_engine.generate_signals_for_backtest(data_with_indicators)
 
         # Use a deep copy so concurrent requests don't corrupt shared CONFIG
         backtest_cfg = copy.deepcopy(CONFIG)
@@ -619,8 +620,9 @@ def get_signals(symbol):
             logger.warning(f"Astro engine unavailable — skipping: {e}")
             astro_events = None
 
-        # generate_signals_sync() is the synchronous entry point; never returns a coroutine.
-        signals_df = signal_engine.generate_signals_sync(data_with_indicators, gann_levels, astro_events)
+        # Backtests must use the vectorized backtest signal generator so cooldown/threshold
+        # logic is applied consistently (generate_signals_sync() returns a single AISignal row).
+        signals_df = signal_engine.generate_signals_for_backtest(data_with_indicators)
         
         # Transform to frontend expected format
         signals = []

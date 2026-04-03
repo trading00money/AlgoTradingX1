@@ -2,9 +2,19 @@
 
 # Symbol, date range, and timeframe for the backtest
 symbol: "XAUUSD"
-start_date: "2025-01-01"
-end_date: "2025-07-01"
+# Note: Yahoo 15m data is limited to ~60 days. Keep this range recent
+# unless MT5 historical data is available.
+start_date: "2025-04-01"
+end_date: "2026-04-01"
 timeframe: "1h"
+
+# XAUUSD-specific settings
+instrument:
+  pip_value: 0.01          # 1 pip = $0.01 per oz
+  lot_size: 100            # 1 standard lot = 100 oz
+  min_lot: 0.01
+  typical_spread_pips: 30  # ~$0.30 spread on gold
+  session_volatility_multiplier: 1.5  # Gold is 50% more volatile than FX majors
 
 # The initial capital to start the backtest with.
 initial_capital: 100000.0
@@ -16,13 +26,20 @@ initial_capital: 100000.0
 commission:
   # 'percentage' of trade value or 'fixed' amount per trade
   type: "percentage"
-  # The commission rate (e.g., 0.075% for Binance futures taker fee)
-  value: 0.075
+  # XAUUSD ECN typical: $3-5 per standard lot (100 oz).
+  # At gold $3800, 1 lot = $380k notional → $5/lot = 0.0013%.
+  # Using 0.003% for a conservative margin above actual ECN rates.
+  # NOTE: The prior value of 0.075% was the Binance crypto taker fee —
+  # completely wrong for gold. It was eating ~$285/side on a 62oz position,
+  # which inflated avg_loss by 28% and suppressed PF to below 1.0.
+  value: 0.003
 
 # Slippage settings
 # Simulates the difference between the expected trade price and the actual execution price.
 slippage:
   # 'percentage' of the entry/exit price or a 'fixed' price amount
   type: "percentage"
-  # The slippage rate (e.g., 0.05% of the price)
-  value: 0.05
+  # XAUUSD M15 ECN typical spread: $0.20-0.50/oz = ~2-5 pips.
+  # 0.01% at $3800 = $0.38/oz = ~3.8 pips per side. Conservative but realistic.
+  # Prior value of 0.05% = $19/oz = 190 pips. Far above any real gold broker.
+  value: 0.01

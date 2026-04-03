@@ -60,6 +60,7 @@ class Backtester:
         # Initialize managers
         risk_manager = RiskManager(self.risk_config, price_data)
         portfolio_manager = PortfolioManager(self.risk_config)
+        diag_logged = 0
 
         data = price_data.copy()
         # Reindex so signals align to price data's index; unmatched dates become NaN (no trade).
@@ -97,7 +98,22 @@ class Backtester:
                     exit_trade_value = exit_price_after_slip * self.position['size']
                     commission_cost = self._apply_commission(exit_trade_value)
 
-                    self.trades.append({**self.position, 'exit_price': exit_price_after_slip, 'exit_date': timestamp, 'pnl': total_pnl - commission_cost, 'commission': commission_cost, 'reason': exit_reason})
+                    # Diagnostics: use initial_risk (SL may have moved via trailing stop)
+                    risk_per_unit = self.position['initial_risk']
+                    planned_rr = self.risk_config.get("risk_reward_ratio", None)
+                    realized_r = ((total_pnl - commission_cost) / (risk_per_unit * self.position['size'])) if (risk_per_unit > 0 and self.position['size'] > 0) else None
+
+                    self.trades.append({
+                        **self.position,
+                        'exit_price': exit_price_after_slip,
+                        'exit_date': timestamp,
+                        'pnl': total_pnl - commission_cost,
+                        'commission': commission_cost,
+                        'reason': exit_reason,
+                        'risk_per_unit': risk_per_unit,
+                        'planned_rr': planned_rr,
+                        'realized_r': realized_r,
+                    })
                     self.position = None
 
             # 2. Check for new entry signals (HOLD and unknown values are skipped)
@@ -118,6 +134,34 @@ class Backtester:
 
                 stop_loss, take_profit = exit_levels
 
+                # Diagnostics: print the actual computed SL/TP distances and the RR config
+                # for the first 5 trades so we can verify YAML keys are being applied.
+                if diag_logged < 5:
+                    stop_distance = abs(entry_price - stop_loss)
+                    tp_distance = abs(take_profit - entry_price)
+                    applied_rr = (tp_distance / stop_distance) if stop_distance > 0 else float("nan")
+                    logger.info(
+                        "DIAG trade#{n} {ts} side={side} entry={entry:.5f} "
+                        "sl={sl:.5f} tp={tp:.5f} stop_dist={sd:.5f} tp_dist={td:.5f} "
+                        "applied_rr={arr:.3f} cfg_rr={cfg_rr} cfg_atr_mult={cfg_atr_mult} "
+                        "sl_method={slm} tp_method={tpm}".format(
+                            n=diag_logged + 1,
+                            ts=timestamp,
+                            side=trade_side,
+                            entry=entry_price,
+                            sl=stop_loss,
+                            tp=take_profit,
+                            sd=stop_distance,
+                            td=tp_distance,
+                            arr=applied_rr,
+                            cfg_rr=self.risk_config.get("risk_reward_ratio", None),
+                            cfg_atr_mult=self.risk_config.get("atr_multiplier", None),
+                            slm=self.risk_config.get("stop_loss_method", None),
+                            tpm=self.risk_config.get("take_profit_method", None),
+                        )
+                    )
+                    diag_logged += 1
+
                 size = portfolio_manager.calculate_position_size(self.capital, entry_price, stop_loss)
                 if size > 0:
                     # Apply commission on entry
@@ -125,8 +169,17 @@ class Backtester:
                     commission_cost = self._apply_commission(entry_trade_value)
 
                     self.position = {
-                        'side': trade_side, 'entry_price': entry_price, 'stop_loss': stop_loss,
-                        'take_profit': take_profit, 'entry_date': timestamp, 'size': size
+                        'side':          trade_side,
+                        'entry_price':   entry_price,
+                        'stop_loss':     stop_loss,
+                        'take_profit':   take_profit,
+                        'entry_date':    timestamp,
+                        'size':          size,
+                        # Trailing stop fields (fixed at entry, never mutated)
+                        'initial_risk':  abs(entry_price - stop_loss),
+                        # Tracks the furthest favourable price seen (updated each bar)
+                        'max_favorable': entry_price,   # for long
+                        'min_favorable': entry_price,   # for short
                     }
 
             # 3. Record daily equity

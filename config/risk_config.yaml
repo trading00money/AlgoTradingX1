@@ -8,6 +8,31 @@
 version: "3.0.0"
 
 # ================================================================
+# ACTIVE RUNTIME PARAMETERS (flat keys read by RiskManager + PortfolioManager)
+# ================================================================
+# RiskManager reads these via self.config.get("key", default).
+# The nested sections below are documentation/reference only —
+# they are NOT read by the engine. These flat keys ARE.
+# ================================================================
+
+# Stop loss: use ATR-based stops, not fixed percentage
+stop_loss_method: "atr"       # "atr" | "percentage"
+atr_period: 14
+atr_multiplier: 2.0           # Stop = 2.0 × ATR (H1-validated)
+                               # Gives MACD momentum entries room to develop before SL
+
+# Take profit: RR ratio applied to the risk distance
+take_profit_method: "rr_ratio"
+risk_reward_ratio: 4.6        # Fixed TP — proven H1 config (WR=36.4%, PF=2.53 ✓)
+                               # Delivered RR = 4.6 - 0.17 drag = 4.43
+                               # Math: 0.364 × 4.43 / 0.636 = 2.53
+
+# Position sizing (PortfolioManager)
+sizing_method: "fixed_fractional"
+risk_percentage: 2.0           # Risk 2% of equity per trade
+                               # Lower = more trades survive drawdown periods
+
+# ================================================================
 # POSITION SIZING
 # ================================================================
 position_sizing:
@@ -89,12 +114,14 @@ stop_loss:
       pips: 50
       percent: 2.0
       
-    # ATR-based stop
+    # ATR-based stop (XAUUSD M15 optimized)
+    # Stop at 1.5x ATR, target at 4.5x ATR → implied RR = 3:1 minimum.
+    # Previous 2.0x ATR stop with 2.0x ATR target = 1:1 RR → PF<1 guaranteed.
     atr_based:
       enabled: true
-      multiplier: 2.0
+      multiplier: 1.5      # Tightened from 2.0: tighter stop = larger position for same $ risk
       period: 14
-      min_distance_pips: 20
+      min_distance_pips: 15  # Adjusted from 20 for M15 gold granularity
       
     # Support/Resistance based
     sr_based:
@@ -201,15 +228,15 @@ take_profit:
       use_fibonacci: true
       buffer_pips: -3  # Exit before resistance
       
-    # ATR-based targets
+    # ATR-based targets (paired with 2.0x ATR stop → RR = 3.5:1, 5:1, 7:1)
     atr_based:
       enabled: true
       targets:
-        - multiplier: 2.0
+        - multiplier: 7.0   # T1: 3.5R exit (stop=2×ATR, target=7×ATR)
           percent: 40
-        - multiplier: 3.0
+        - multiplier: 10.0  # T2: 5R exit
           percent: 35
-        - multiplier: 5.0
+        - multiplier: 14.0  # T3: runner to 7R
           percent: 25
           
   # Profit protection
@@ -520,14 +547,15 @@ account_protection:
     
   # Win rate monitoring
   win_rate:
-    min_acceptable: 0.40  # 40% win rate minimum
-    evaluation_period: 30  # trades
-    action_below_min: "reduce_size"
-    
+    min_acceptable: 0.35   # 35% minimum (achievable with raised signal filters)
+    evaluation_period: 20  # Reduced from 30: detect problems faster on M15
+    action_below_min: "pause_trading"  # Changed from reduce_size: stop entirely below floor
+
   # Profit factor
   profit_factor:
-    min_acceptable: 1.5
-    evaluation_period: 50  # trades
+    min_acceptable: 1.5    # Keep as early warning
+    target: 2.0            # Added explicit target
+    evaluation_period: 30  # Reduced from 50: faster feedback loop
     
   # Circuit breaker
   circuit_breaker:

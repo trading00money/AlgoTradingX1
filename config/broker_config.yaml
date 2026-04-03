@@ -179,6 +179,10 @@ trading_modes:
     mtAccountType: "demo"              # change to "real" for live
     mtBroker: "XMGlobal"
     selectedInstrument: "XAUUSD"
+    # Map standard symbol names → broker-specific names
+    symbolAliases:
+      XAUUSD: "GOLD"
+      XAGUSD: "SILVER"
     riskPerTrade: 1.0
     fixedLotSize: 0.01
     maxOpenPositions: 3

@@ -7,7 +7,7 @@
 //|  Copy libzmq.dll (64-bit) into MQL5\Libraries\.                  |
 //+------------------------------------------------------------------+
 #property copyright "Gann-Ehlers Trading System"
-#property version   "2.00"
+#property version   "2.10"
 #property description "ZeroMQ Bridge EA for MetaTrader 5 (raw DLL)"
 
 //--- Raw ZMQ DLL imports
@@ -195,7 +195,7 @@ string Dispatch(string cmd, string action)
     if(action == "PING")          return Pong();
     if(action == "GET_ACCOUNT")   return GetAccount();
     if(action == "GET_PRICE")     return GetPrice(JsonGet(cmd, "symbol"));
-    if(action == "GET_HISTORY")   return GetHistory(JsonGet(cmd, "symbol"), JsonGet(cmd, "timeframe"), (int)StringToInteger(JsonGet(cmd, "bars")));
+    if(action == "GET_HISTORY")   return GetHistory(JsonGet(cmd, "symbol"), JsonGet(cmd, "timeframe"), (int)StringToInteger(JsonGet(cmd, "bars")), StringToInteger(JsonGet(cmd, "from_time")), StringToInteger(JsonGet(cmd, "to_time")));
     if(action == "GET_POSITIONS") return GetPositions();
     if(action == "PLACE_ORDER")   return PlaceOrder(cmd);
     if(action == "MODIFY_ORDER")  return ModifyOrder(cmd);
@@ -253,15 +253,20 @@ string GetPrice(string symbol)
 }
 
 //+------------------------------------------------------------------+
-string GetHistory(string symbol, string tf, int bars)
+string GetHistory(string symbol, string tf, int bars, long from_time=0, long to_time=0)
 {
-    if(bars <= 0 || bars > 10000) bars = 1000;
+    if(bars <= 0) bars = 1000;
+    if(bars > 50000) bars = 50000;
     if(!SymbolSelect(symbol, true))
         return "{\"status\":\"ERROR\",\"message\":\"Symbol not found: " + symbol + "\"}";
 
     ENUM_TIMEFRAMES period = TfToEnum(tf);
     MqlRates rates[];
-    int n = CopyRates(symbol, period, 0, bars, rates);
+    int n;
+    if(from_time > 0 && to_time > 0)
+        n = CopyRates(symbol, period, (datetime)from_time, (datetime)to_time, rates);
+    else
+        n = CopyRates(symbol, period, 0, bars, rates);
     if(n <= 0)
         return "{\"status\":\"ERROR\",\"message\":\"No data for " + symbol + " " + tf + "\"}";
 

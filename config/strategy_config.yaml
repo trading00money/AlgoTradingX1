@@ -22,10 +22,13 @@ ensemble:
     options_flow: 0.05
   
   # Minimum strategies that must agree for signal
-  min_consensus: 3
-  
+  # Raised from 3→4: requires 67% agreement to filter low-quality entries
+  # that drove win rate to 29% on XAUUSD M15
+  min_consensus: 4
+
   # Confidence threshold for trade execution (0-1)
-  min_confidence: 0.65
+  # Raised from 0.65→0.75: eliminates borderline signals
+  min_confidence: 0.75
   
   # Dynamic weight adjustment based on performance
   adaptive_weights:
@@ -213,24 +216,34 @@ trading_mode:
 timeframes:
   primary: "H4"
   secondary: ["D1", "H1"]
-  
+  execution: "M15"  # Added: M15 is the actual backtest/entry timeframe
+
   # Multi-timeframe analysis
   mtf_analysis:
     enabled: true
     alignment_required: true
-    
+
+    # M15 hierarchy: H4 bias → H1 structure → M15 entry trigger
+    # All 3 must agree in direction before an M15 signal is valid
     hierarchy:
       long_term: "W1"    # Trend
       medium_term: "D1"  # Structure
-      short_term: "H4"   # Entry
-      execution: "H1"    # Precision
-      
+      short_term: "H4"   # Bias
+      entry: "H1"        # Structure confirmation
+      execution: "M15"   # Signal trigger
+
+    # Require H4 + H1 alignment for any M15 entry
+    mtf_alignment:
+      required_timeframes: ["H4", "H1"]
+      min_aligned: 2       # Both must agree with M15 direction
+
   # Timeframe weights for signal generation
   weights:
-    W1: 0.10
-    D1: 0.35
+    W1: 0.05
+    D1: 0.20
     H4: 0.35
-    H1: 0.20
+    H1: 0.25
+    M15: 0.15
 
 # ================================================================
 # SIGNAL FILTERING
@@ -272,7 +285,9 @@ signal_filter:
     
     avoid_choppy_markets:
       enabled: true
-      adx_threshold: 25
+      # Raised from 25→30: XAUUSD on M15 requires stronger trend conviction
+      # ADX < 30 on gold M15 = noise, not signal
+      adx_threshold: 30
 
 # ================================================================
 # FORECASTING CONFIGURATION

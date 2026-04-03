@@ -84,6 +84,7 @@ class DataFeed:
                         'password': mode.get('mtPassword', ''),
                         'server': mode.get('mtServer', ''),
                         'broker': mode.get('mtBroker', ''),
+                        'symbol_aliases': mode.get('symbolAliases', {}),
                     }
                     mt_connector = MetaTraderConnectorFactory.get_connector(mode_id, mt_config)
                     if mt_connector.connect():
@@ -291,22 +292,15 @@ class DataFeed:
         connector = list(mt_connectors.values())[0]
         
         # Normalize symbol for MT (e.g., "EUR/USD" → "EURUSD")
-        mt_symbol = connector.normalize_symbol(symbol) if hasattr(connector, 'normalize_symbol') else symbol.replace('/', '').replace('-', '').upper()
+        mt_symbol = symbol.replace('/', '').replace('-', '').upper()
+        # Apply broker-specific symbol aliases (e.g. XAUUSD → GOLD)
+        aliases = connector.config.get('symbol_aliases', {})
+        mt_symbol = aliases.get(mt_symbol, mt_symbol)
+        logger.debug(f"MT5 symbol resolved: {symbol} → {mt_symbol}")
         
         try:
-            # Calculate bar count from date range
             start_dt = pd.Timestamp(start_date)
-            end_dt = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
-            days = (end_dt - start_dt).days
-
-            tf_bars_per_day = {
-                '1m': 1440, '5m': 288, '15m': 96, '30m': 48,
-                '1h': 24, '2h': 12, '4h': 6, '1d': 1, '1w': 0.14,
-                'M1': 1440, 'M5': 288, 'M15': 96, 'M30': 48,
-                'H1': 24, 'H2': 12, 'H4': 6, 'D1': 1, 'W1': 0.14,
-            }
-            bars_per_day = tf_bars_per_day.get(timeframe, 24)
-            count = max(int(days * bars_per_day), 100)
+            end_dt   = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
 
             # Map to MT5 timeframe string expected by get_history()
             tf_map = {
@@ -315,20 +309,48 @@ class DataFeed:
             }
             mt_tf = tf_map.get(timeframe, timeframe)
 
-            # get_history() is synchronous
-            df = connector.get_history(mt_symbol, mt_tf, count)
+            # Use time-range CopyRates: fetch only the bars in the backtest window.
+            # This is 4–10x more efficient than fetching N bars from today.
+            window_days = (end_dt - start_dt).days + 1
+            tf_bars_per_day = {
+                'M1': 1440, 'M5': 288, 'M15': 96, 'M30': 48,
+                'H1': 24,  'H2': 12,  'H4': 6,  'D1': 1, 'W1': 0.14,
+            }
+            bars_per_day = tf_bars_per_day.get(mt_tf, 24)
+            estimated_bars = int(window_days * bars_per_day * 1.1)  # 10% buffer for gaps
 
-            if df is not None and not df.empty:
-                # Filter to requested date range
-                df = df[df.index >= start_date]
-                if end_date:
-                    df = df[df.index <= end_date]
-                df = self._normalize_columns(df)
-                logger.success(f"Successfully fetched {len(df)} rows for {symbol} from MetaTrader.")
-                return df
-            else:
-                logger.info(f"MetaTrader connector returned empty data for {mt_symbol} (EA bridge may not be running)")
+            logger.debug(
+                f"MT5 requesting time-range {start_dt.date()} → {end_dt.date()} "
+                f"(~{estimated_bars} {mt_tf} bars)"
+            )
+
+            # Scale timeout: ~8ms per bar for MQL5 JSON serialisation, min 30s
+            history_timeout_ms = max(30000, estimated_bars * 8)
+            df = connector.get_history(
+                mt_symbol, mt_tf,
+                from_time=start_dt, to_time=end_dt,
+                history_timeout_ms=history_timeout_ms,
+            )
+
+            if df is None or df.empty:
+                logger.warning(f"MT5 returned no data for {mt_symbol} {mt_tf}")
                 return None
+
+            logger.debug(f"MT5 raw fetch: {len(df)} bars ({df.index[0]} → {df.index[-1]})")
+
+            # Filter to requested date range
+            df = df[(df.index >= start_date) & (df.index <= (end_date or str(pd.Timestamp.now().date())))]
+            df = self._normalize_columns(df)
+
+            if df.empty:
+                logger.warning(
+                    f"MT5 data for {mt_symbol} exists but none falls in "
+                    f"{start_date} → {end_date}."
+                )
+                return None
+
+            logger.success(f"Successfully fetched {len(df)} rows for {symbol} from MetaTrader.")
+            return df
 
         except Exception as e:
             logger.warning(f"MetaTrader fetch error for {symbol}: {e}")

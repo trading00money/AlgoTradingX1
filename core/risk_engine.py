@@ -70,7 +70,10 @@ class RiskConfig:
     kill_switch_loss_threshold: float = 10.0  # Percentage trigger
     
     # Risk reward
-    min_risk_reward_ratio: float = 1.5
+    # Raised from 1.5→3.0 to match rr_config.yaml default.min_rr.
+    # The old 1.5 floor was silently overriding the YAML and allowing
+    # trades with insufficient RR, which drove PF to 0.718.
+    min_risk_reward_ratio: float = 3.0
 
 
 @dataclass

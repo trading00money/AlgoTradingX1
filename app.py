@@ -56,16 +56,19 @@ def run_backtest_session(config):
         data_with_indicators = ehlers_engine.calculate_all_indicators(price_data)
         astro_events = astro_engine.analyze_dates(price_data.index)
 
-        # 4. Generate signals
+        # 4. Generate signals (backtest path)
+        # Use the vectorized backtest generator so cooldown/threshold logic matches `run.py`.
         log_container.text("Generating trading signals...")
-        signals = signal_engine.generate_signals(data_with_indicators, gann_levels, astro_events)
+        signals = signal_engine.generate_signals_for_backtest(data_with_indicators)
         if signals.empty:
             st.warning("No signals were generated for this period.")
             return
 
         # 5. Run backtest
         log_container.text("Executing backtest simulation...")
-        backtester = Backtester(config.get('risk_config', {}), initial_capital=100000)
+        # Backtester expects the full config dict so it can pick up
+        # risk_config + backtest_config (initial_capital, slippage, commission, etc).
+        backtester = Backtester(config)
         results = backtester.run(data_with_indicators, signals)
 
         # 6. Calculate metrics

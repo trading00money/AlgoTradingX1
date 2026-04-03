@@ -210,21 +210,22 @@ class MetaTraderConnector:
             logger.error("Not connected to MT5")
             return None
         
+        effective_timeout = timeout_ms if timeout_ms is not None else self.timeout_ms
         try:
-            # Send command
+            self._command_socket.setsockopt(zmq.RCVTIMEO, effective_timeout)
             message = json.dumps(command).encode('utf-8')
             self._command_socket.send(message)
-            
-            # Receive response
             response = self._command_socket.recv_json()
             return response
-            
         except zmq.error.Again:
-            logger.error("Command timeout")
+            logger.error(f"Command timeout after {effective_timeout}ms: {command.get('action')}")
             return None
         except Exception as e:
             logger.error(f"Command error: {e}")
             return None
+        finally:
+            # Restore default timeout
+            self._command_socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
     
     def _receive_loop(self):
         """Background thread for receiving streaming data."""
@@ -481,35 +482,54 @@ class MetaTraderConnector:
         self,
         symbol: str,
         timeframe: str = "H1",
-        bars: int = 500
+        bars: int = 500,
+        from_time=None,
+        to_time=None,
+        history_timeout_ms: int = 60000,
     ) -> Optional[pd.DataFrame]:
         """
         Get historical OHLCV data.
-        
+
+        When from_time/to_time (datetime or pd.Timestamp) are provided, the EA
+        uses CopyRates with a time range — fetching only the bars in that window.
+        This is far more efficient than requesting N bars from now when the window
+        is far in the past.
+
         Args:
             symbol: Trading symbol
-            timeframe: Timeframe (M1, M5, M15, M30, H1, H4, D1, W1, MN)
-            bars: Number of bars to retrieve
-            
-        Returns:
-            DataFrame with OHLCV data
+            timeframe: Timeframe string (M1, M5, M15, M30, H1, H4, D1, W1, MN)
+            bars: Number of bars (used when no time range supplied; EA limit 50000)
+            from_time: Start of desired range (datetime/Timestamp, UTC)
+            to_time: End of desired range (datetime/Timestamp, UTC)
+            history_timeout_ms: Socket timeout for this request in ms
         """
-        response = self._send_command({
-            "action": "GET_HISTORY",
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "bars": bars
-        })
-        
-        if response and response.get("status") == "OK":
-            data = response.get("data", [])
-            if data:
-                df = pd.DataFrame(data)
-                df['time'] = pd.to_datetime(df['time'], unit='s')
-                df.set_index('time', inplace=True)
-                return df
-        
-        return None
+        cmd: dict = {"action": "GET_HISTORY", "symbol": symbol,
+                     "timeframe": timeframe, "bars": str(bars)}
+        if from_time is not None:
+            cmd["from_time"] = str(int(pd.Timestamp(from_time).timestamp()))
+        if to_time is not None:
+            cmd["to_time"] = str(int(pd.Timestamp(to_time).timestamp()))
+
+        if from_time is not None and to_time is not None:
+            logger.debug(f"GET_HISTORY {symbol} {timeframe} {from_time} → {to_time} (timeout={history_timeout_ms}ms)")
+        else:
+            logger.debug(f"GET_HISTORY {symbol} {timeframe} x{bars} bars (timeout={history_timeout_ms}ms)")
+
+        response = self._send_command(cmd, timeout_ms=history_timeout_ms)
+
+        if not response or response.get("status") != "OK":
+            logger.warning(f"GET_HISTORY failed: {response}")
+            return None
+
+        data = response.get("data", [])
+        if not data:
+            return None
+
+        df = pd.DataFrame(data)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        df.sort_index(inplace=True)
+        return df
     
     def subscribe_price(self, symbol: str, callback: Callable) -> bool:
         """
