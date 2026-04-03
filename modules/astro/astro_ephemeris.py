@@ -96,7 +96,11 @@ class AstroEphemeris:
             return {body.lower(): pd.Series(np.nan, index=dates, name=f"{body.lower()}_lon") 
                     for body in bodies}
 
-        t = self.timescale.from_datetime(dates.to_pydatetime())
+        if dates.tz is None:
+            dates_utc = dates.tz_localize('UTC')
+        else:
+            dates_utc = dates.tz_convert('UTC')
+        t = self.timescale.from_datetime(dates_utc.to_pydatetime())
         positions = {}
 
         for body_name in bodies:

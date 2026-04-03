@@ -58,7 +58,7 @@ class DataFeed:
     def _initialize_connectors(self):
         """Initializes connector objects based on the broker configuration."""
         # Lazy imports to avoid circular dependency with core.enums
-        from connectors.metatrader_connector import MetaTraderConnectorFactory, MTCredentials, MTVersion
+        from connectors.metatrader_connector import MetaTraderConnectorFactory
         from connectors.exchange_connector import ExchangeConnectorFactory, ExchangeCredentials
         from connectors.fix_connector import FIXConnectorFactory, FIXCredentials
         
@@ -75,16 +75,22 @@ class DataFeed:
             
             try:
                 if broker_type == "metatrader":
-                    creds = MTCredentials(
-                        login=mode.get('mtLogin', ''),
-                        password=mode.get('mtPassword', ''),
-                        server=mode.get('mtServer', ''),
-                        version=MTVersion.MT5 if mode.get('mtType') == 'mt5' else MTVersion.MT4,
-                        account_type=mode.get('mtAccountType', 'demo'),
-                        broker=mode.get('mtBroker', '')
-                    )
-                    self.connectors[f"mt_{mode_id}"] = MetaTraderConnectorFactory.create(creds, mode_id)
-                    logger.info(f"Initialized MetaTrader connector: {mode_id}")
+                    mt_config = {
+                        'host': mode.get('mtHost', 'localhost'),
+                        'command_port': mode.get('mtCommandPort', 32768),
+                        'data_port': mode.get('mtDataPort', 32769),
+                        'timeout_ms': mode.get('mtTimeoutMs', 5000),
+                        'login': mode.get('mtLogin', ''),
+                        'password': mode.get('mtPassword', ''),
+                        'server': mode.get('mtServer', ''),
+                        'broker': mode.get('mtBroker', ''),
+                    }
+                    mt_connector = MetaTraderConnectorFactory.get_connector(mode_id, mt_config)
+                    if mt_connector.connect():
+                        self.connectors[f"mt_{mode_id}"] = mt_connector
+                        logger.info(f"Initialized MetaTrader connector: {mode_id}")
+                    else:
+                        logger.warning(f"MetaTrader connector {mode_id} created but EA bridge not reachable — skipping")
                     
                 elif broker_type == "crypto_exchange":
                     exchange_name = mode.get('exchange', 'binance')
@@ -288,49 +294,42 @@ class DataFeed:
         mt_symbol = connector.normalize_symbol(symbol) if hasattr(connector, 'normalize_symbol') else symbol.replace('/', '').replace('-', '').upper()
         
         try:
-            # Calculate approximate bar count from date range
+            # Calculate bar count from date range
             start_dt = pd.Timestamp(start_date)
             end_dt = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
             days = (end_dt - start_dt).days
-            
+
             tf_bars_per_day = {
                 '1m': 1440, '5m': 288, '15m': 96, '30m': 48,
-                '1h': 24, '2h': 12, '4h': 6, '1d': 1, '1w': 0.14
+                '1h': 24, '2h': 12, '4h': 6, '1d': 1, '1w': 0.14,
+                'M1': 1440, 'M5': 288, 'M15': 96, 'M30': 48,
+                'H1': 24, 'H2': 12, 'H4': 6, 'D1': 1, 'W1': 0.14,
             }
             bars_per_day = tf_bars_per_day.get(timeframe, 24)
             count = max(int(days * bars_per_day), 100)
-            
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # We're in an async context, create a new event loop in a thread
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        data = pool.submit(
-                            lambda: asyncio.run(connector.get_historical_data(mt_symbol, timeframe, count))
-                        ).result(timeout=30)
-                else:
-                    data = loop.run_until_complete(
-                        connector.get_historical_data(mt_symbol, timeframe, count)
-                    )
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                data = loop.run_until_complete(
-                    connector.get_historical_data(mt_symbol, timeframe, count)
-                )
-                loop.close()
-            
-            if data and len(data) > 0:
-                df = pd.DataFrame(data)
+
+            # Map to MT5 timeframe string expected by get_history()
+            tf_map = {
+                '1m': 'M1', '5m': 'M5', '15m': 'M15', '30m': 'M30',
+                '1h': 'H1', '2h': 'H2', '4h': 'H4', '1d': 'D1', '1w': 'W1',
+            }
+            mt_tf = tf_map.get(timeframe, timeframe)
+
+            # get_history() is synchronous
+            df = connector.get_history(mt_symbol, mt_tf, count)
+
+            if df is not None and not df.empty:
+                # Filter to requested date range
+                df = df[df.index >= start_date]
+                if end_date:
+                    df = df[df.index <= end_date]
                 df = self._normalize_columns(df)
                 logger.success(f"Successfully fetched {len(df)} rows for {symbol} from MetaTrader.")
                 return df
             else:
-                logger.info(f"MetaTrader connector returned empty data for {mt_symbol} (simulation mode)")
+                logger.info(f"MetaTrader connector returned empty data for {mt_symbol} (EA bridge may not be running)")
                 return None
-                
+
         except Exception as e:
             logger.warning(f"MetaTrader fetch error for {symbol}: {e}")
             return None
@@ -365,38 +364,41 @@ class DataFeed:
         ccxt_tf = tf_map.get(timeframe, timeframe)
         
         try:
-            # Convert start_date to milliseconds
-            since = int(pd.Timestamp(start_date).timestamp() * 1000)
-            
-            # Calculate limit
-            start_dt = pd.Timestamp(start_date)
+            since_ms = int(pd.Timestamp(start_date).timestamp() * 1000)
             end_dt = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
-            days = (end_dt - start_dt).days
-            tf_bars_per_day = {
-                '1m': 1440, '5m': 288, '15m': 96, '30m': 48,
-                '1h': 24, '2h': 12, '4h': 6, '1d': 1, '1w': 0.14
-            }
-            bars_per_day = tf_bars_per_day.get(ccxt_tf, 24)
-            limit = min(max(int(days * bars_per_day), 100), 1000)
-            
-            # Fetch OHLCV via CCXT (synchronous)
-            ohlcv = exchange_instance.fetch_ohlcv(ex_symbol, ccxt_tf, since=since, limit=limit)
-            
-            if ohlcv and len(ohlcv) > 0:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            end_ms = int(end_dt.timestamp() * 1000)
+            page_size = 1000  # max bars per CCXT request
+
+            all_ohlcv = []
+            while since_ms < end_ms:
+                batch = exchange_instance.fetch_ohlcv(
+                    ex_symbol, ccxt_tf, since=since_ms, limit=page_size
+                )
+                if not batch:
+                    break
+                all_ohlcv.extend(batch)
+                last_ts = batch[-1][0]
+                if last_ts <= since_ms or len(batch) < page_size:
+                    break  # no more data or reached exchange boundary
+                since_ms = last_ts + 1  # advance past last fetched bar
+
+            if all_ohlcv:
+                df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df.set_index('timestamp', inplace=True)
-                
-                # Filter by end_date if provided
+                df = df[~df.index.duplicated(keep='last')]
+                df.sort_index(inplace=True)
+
+                # Filter to requested date range
                 if end_date:
                     df = df[df.index <= end_date]
-                
+
                 logger.success(f"Successfully fetched {len(df)} rows for {symbol} from exchange.")
                 return df
             else:
                 logger.warning(f"Exchange returned empty data for {ex_symbol}")
                 return None
-                
+
         except Exception as e:
             logger.warning(f"Exchange fetch error for {symbol}: {e}")
             return None
@@ -531,6 +533,18 @@ class DataFeed:
             'W1': '1wk',
         }
         yf_interval = tf_map.get(timeframe, '1d')
+
+        # yfinance enforces a 730-day limit for intraday intervals.
+        # If the requested start_date is beyond that, clamp to the allowed boundary.
+        INTRADAY_INTERVALS = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'}
+        if yf_interval in INTRADAY_INTERVALS:
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=729)
+            if pd.Timestamp(start_date) < cutoff:
+                logger.warning(
+                    f"yfinance: {yf_interval} data only available for the last 730 days. "
+                    f"Clamping start_date from {start_date} to {cutoff.date()}."
+                )
+                start_date = cutoff.strftime('%Y-%m-%d')
 
         end = end_date if end_date else pd.Timestamp.now().strftime('%Y-%m-%d')
 

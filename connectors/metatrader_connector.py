@@ -262,9 +262,10 @@ class MetaTraderConnector:
     
     def _sync_account_info(self) -> bool:
         """Synchronize account information."""
-        response = self._send_command({"action": "ACCOUNT_INFO"})
+        response = self._send_command({"action": "GET_ACCOUNT"})
         if response and response.get("status") == "OK":
-            data = response.get("data", {})
+            # EA returns fields at top level, not nested under "data"
+            data = response.get("data", response)
             self._account_info = MTAccountInfo(
                 login=data.get("login", 0),
                 balance=data.get("balance", 0.0),

@@ -166,6 +166,35 @@ trading_modes:
       - "M15"
       - "H1"
       - "H4"
+  
+  - id: "mt5-xauusd"
+    name: "MT5 - Gold (XAUUSD)"
+    mode: "spot"
+    enabled: true
+    brokerType: "metatrader"
+    mtType: "mt5"
+    mtServer: "XMGlobal-MT5 2"        # e.g. ICMarkets-Demo
+    mtLogin: "168516134"                # your MT5 account number
+    mtPassword: "Anam.cool65"        # or use ${MT5_PASSWORD}
+    mtAccountType: "demo"              # change to "real" for live
+    mtBroker: "XMGlobal"
+    selectedInstrument: "XAUUSD"
+    riskPerTrade: 1.0
+    fixedLotSize: 0.01
+    maxOpenPositions: 3
+    leverage: 20
+    # all other MT5 keys can stay at defaults below
+    apiKey: ""
+    apiSecret: ""
+    passphrase: ""
+    testnet: false
+    brokerConnected: false
+    mtAutoSlippage: true
+    mtDefaultSlippage: 5
+    mtMaxSlippage: 10
+    mtMetalsSlippage: 5
+
+
 
 # ================================================================
 # MANUAL LEVERAGE CONFIGURATION

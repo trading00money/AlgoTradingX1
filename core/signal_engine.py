@@ -774,6 +774,83 @@ class AISignalEngine:
             'risk_reward': signal.risk_reward
         }])
     
+    def generate_signals_for_backtest(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Vectorized signal generation for backtesting. Computes a signal for every
+        bar in *data* using the same logic as the individual analysis methods but
+        without the per-bar async overhead.
+
+        Returns a DataFrame indexed by data.index with a 'signal' column containing
+        SignalType string values (e.g. 'BUY', 'SELL', 'HOLD').
+        """
+        close = data['close']
+        high  = data['high']
+        low   = data['low']
+
+        w_gann    = self.weights.get('gann',    0.25)
+        w_ehlers  = self.weights.get('ehlers',  0.20)
+        w_ml      = self.weights.get('ml',      0.25)
+        w_pattern = self.weights.get('pattern', 0.10)
+
+        # --- Ehlers proxy (momentum + RSI) ---
+        momentum = close / close.shift(10) - 1
+        delta    = close.diff()
+        gain     = delta.clip(lower=0).rolling(14).mean()
+        loss     = (-delta.clip(upper=0)).rolling(14).mean()
+        rsi      = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+
+        ehlers_buy  = ((momentum > 0.02).astype(int) * 2 + (rsi < 30).astype(int)).clip(upper=3)
+        ehlers_sell = ((momentum < -0.02).astype(int) * 2 + (rsi > 70).astype(int)).clip(upper=3)
+        ehlers_conf_buy  = (50 + (ehlers_buy  / 3) * 40).clip(50, 90)
+        ehlers_conf_sell = (50 + (ehlers_sell / 3) * 40).clip(50, 90)
+        ehlers_score_buy  = w_ehlers * ehlers_conf_buy  / 100
+        ehlers_score_sell = w_ehlers * ehlers_conf_sell / 100
+
+        # --- ML proxy (MA crossover) ---
+        sma20 = close.rolling(20).mean()
+        sma50 = close.rolling(50).mean()
+        ml_buy  = ((close > sma20) & (sma20 > sma50)).astype(float) * 0.65
+        ml_sell = ((close < sma20) & (sma20 < sma50)).astype(float) * 0.65
+        ml_score_buy  = w_ml * ml_buy
+        ml_score_sell = w_ml * ml_sell
+
+        # --- Pattern proxy (higher highs/lows) ---
+        hh = (high > high.shift(5)) & (low > low.shift(5))
+        lh = (high < high.shift(5)) & (low < low.shift(5))
+        pat_score_buy  = w_pattern * hh.astype(float) * 0.55
+        pat_score_sell = w_pattern * lh.astype(float) * 0.55
+
+        # --- Gann proxy (price position within rolling range) ---
+        roll_high = high.rolling(50).max()
+        roll_low  = low.rolling(50).min()
+        rng = (roll_high - roll_low).replace(0, np.nan)
+        pos = (close - roll_low) / rng
+        gann_buy  = (pos < 0.3).astype(float) * w_gann * ((0.3 - pos.clip(upper=0.3)) / 0.3 * 0.45 + 0.5)
+        gann_sell = (pos > 0.7).astype(float) * w_gann * ((pos.clip(lower=0.7) - 0.7) / 0.3 * 0.45 + 0.5)
+        gann_score_buy  = gann_buy.fillna(0)
+        gann_score_sell = gann_sell.fillna(0)
+
+        total_weight = w_gann + w_ehlers + w_ml + w_pattern
+        buy_score  = (gann_score_buy  + ehlers_score_buy  + ml_score_buy  + pat_score_buy)  / total_weight
+        sell_score = (gann_score_sell + ehlers_score_sell + ml_score_sell + pat_score_sell) / total_weight
+
+        # Map scores to signal strings
+        conditions = [
+            (buy_score > sell_score) & (buy_score > 0.7),
+            (buy_score > sell_score) & (buy_score > 0.4),
+            (sell_score > buy_score) & (sell_score > 0.7),
+            (sell_score > buy_score) & (sell_score > 0.4),
+        ]
+        choices = [
+            SignalType.STRONG_BUY.value,
+            SignalType.BUY.value,
+            SignalType.STRONG_SELL.value,
+            SignalType.SELL.value,
+        ]
+        signal_col = np.select(conditions, choices, default=SignalType.HOLD.value)
+
+        return pd.DataFrame({'signal': signal_col}, index=data.index)
+
     def generate_signals_sync(
         self,
         data: pd.DataFrame,

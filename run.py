@@ -49,16 +49,16 @@ def run_backtest(config: Dict):
     ml_engine = MLEngine(config) # Pass the full config
     signal_engine = AISignalEngine(config.get('strategy_config', {}))
 
-    # 2. Get historical data
-    # For now, we'll hardcode a symbol and date range for testing.
-    # In a real scenario, this would be driven by the backtest config.
-    symbol = "BTC/USDT"
-    start_date = "2024-01-01"
-    end_date = "2025-01-01"
+    # 2. Get historical data — driven by backtest_config
+    backtest_cfg = config.get('backtest_config', {})
+    symbol = backtest_cfg.get('symbol', 'BTC/USDT')
+    start_date = backtest_cfg.get('start_date', '2024-01-01')
+    end_date = backtest_cfg.get('end_date', '2025-01-01')
+    timeframe = backtest_cfg.get('timeframe', '1h')
 
     price_data = data_feed.get_historical_data(
         symbol=symbol,
-        timeframe="1h",
+        timeframe=timeframe,
         start_date=start_date,
         end_date=end_date
     )
@@ -77,10 +77,10 @@ def run_backtest(config: Dict):
     if ml_predictions is not None:
         data_with_indicators = data_with_indicators.join(ml_predictions)
 
-    # 4. Generate signals
-    signals = signal_engine.generate_signals_sync(data_with_indicators, gann_levels, astro_events)
+    # 4. Generate signals — one per bar, aligned to price_data.index
+    signals = signal_engine.generate_signals_for_backtest(data_with_indicators)
 
-    if signals.empty:
+    if signals.empty or signals['signal'].isna().all():
         logger.warning("No signals were generated. Backtest cannot proceed.")
         return
 
