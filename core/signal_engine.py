@@ -776,8 +776,8 @@ class AISignalEngine:
     
     def generate_signals_for_backtest(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        MACD Zero-Cross + EMA200 Regime + DI Directional + Histogram Magnitude
-        XAUUSD H1 — target PF ≥ 2.5
+        MACD Zero-Cross + EMA200 Regime + D1 EMA50 HTF Filter + DI Directional + Histogram Magnitude
+        XAUUSD H1 — target PF ≥ 2.5, robust across multi-year periods
 
         WHAT CHANGED FROM v1 (PF=1.30, WR=35%)
         ========================================
@@ -859,6 +859,24 @@ class AISignalEngine:
         bull_regime = (close > ema200) & (ema200_slope > 0)
         bear_regime = (close < ema200) & (ema200_slope < 0)
 
+        # ── D1 regime gate (higher-timeframe trend filter) ────────────────────
+        # Resample H1 bars to Daily, compute EMA50 on daily close.
+        # D1 EMA50 ≈ 50 trading days = ~2.5 months intermediate trend.
+        # Forward-fill daily values back to H1 index.
+        # Purpose: block entries when the multi-week trend has turned against us.
+        # This is the filter that distinguishes 2025 (strong bull) from 2021-2024
+        # (ranging or correcting) — the H1 EMA200 alone is too short (~8 days).
+        daily_close  = data['close'].resample('D').last().dropna()
+        d1_ema50     = daily_close.ewm(span=50, adjust=False).mean()
+        d1_slope     = d1_ema50 - d1_ema50.shift(5)  # 5-day slope ≈ 1 trading week
+
+        d1_ema50_h1    = d1_ema50.reindex(data.index, method='ffill')
+        d1_slope_h1    = d1_slope.reindex(data.index, method='ffill')
+        daily_close_h1 = daily_close.reindex(data.index, method='ffill')
+
+        d1_bull = (daily_close_h1 > d1_ema50_h1) & (d1_slope_h1 > 0)
+        d1_bear = (daily_close_h1 < d1_ema50_h1) & (d1_slope_h1 < 0)
+
         # ── ADX + Filter 2: DI Directional Confirmation ───────────────────────
         up_move   = high - high.shift(1)
         down_move = low.shift(1) - low
@@ -892,6 +910,8 @@ class AISignalEngine:
         _f2d = int((hist_cross_down & cross_magnitude_ok_down).sum())
         _f3u = int((hist_cross_up & bull_regime).sum())
         _f3d = int((hist_cross_down & bear_regime).sum())
+        _f3du = int((hist_cross_up & d1_bull).sum())
+        _f3dd = int((hist_cross_down & d1_bear).sum())
         _f4u = int((hist_cross_up & di_bull).sum())
         _f4d = int((hist_cross_down & di_bear).sum())
         _f5u = int((hist_cross_up & (adx > 20)).sum())
@@ -900,11 +920,11 @@ class AISignalEngine:
         _f6d = int((hist_cross_down & rsi_was_high).sum())
         logger.info(
             f"[MACDv2 DIAG BUY]  cross={_f1u} | +magnitude={_f2u} "
-            f"| +regime={_f3u} | +di={_f4u} | +adx={_f5u} | +rsi_pb={_f6u}"
+            f"| +h1_regime={_f3u} | +d1_trend={_f3du} | +di={_f4u} | +adx={_f5u} | +rsi_pb={_f6u}"
         )
         logger.info(
             f"[MACDv2 DIAG SELL] cross={_f1d} | +magnitude={_f2d} "
-            f"| +regime={_f3d} | +di={_f4d} | +adx={_f5d} | +rsi_pb={_f6d}"
+            f"| +h1_regime={_f3d} | +d1_trend={_f3dd} | +di={_f4d} | +adx={_f5d} | +rsi_pb={_f6d}"
         )
 
         # ── Composite Entry Gates ─────────────────────────────────────────────
@@ -917,17 +937,19 @@ class AISignalEngine:
         buy_condition = (
             hist_cross_up          &   # histogram zero-cross up (1 bar only)
             cross_magnitude_ok_up  &   # cross has energy (> 0.05 ATR)
-            bull_regime            &   # above EMA200, slope strictly rising
+            bull_regime            &   # above H1 EMA200, slope strictly rising
+            d1_bull                &   # above D1 EMA50, daily slope rising (HTF filter)
             di_bull                &   # plus_di > minus_di + 1
             (adx > 15)             &   # validated threshold
-            rsi_was_low            &   # RSI dipped < 55 in last 10 bars
-            (rsi < 75)                 # M30: restored from H1
+            rsi_was_low            &   # RSI dipped < 52 in last 8 bars
+            (rsi < 75)
         )
 
         sell_condition = (
             hist_cross_down         &
             cross_magnitude_ok_down &
-            bear_regime             &
+            bear_regime             &   # below H1 EMA200, slope strictly falling
+            d1_bear                 &   # below D1 EMA50, daily slope falling (HTF filter)
             di_bear                 &
             (adx > 15)              &
             rsi_was_high            &

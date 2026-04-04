@@ -29,7 +29,7 @@ risk_reward_ratio: 4.6        # Fixed TP — proven H1 config (WR=36.4%, PF=2.53
 
 # Position sizing (PortfolioManager)
 sizing_method: "fixed_fractional"
-risk_percentage: 2.0           # Risk 2% of equity per trade
+risk_percentage: 1.0           # Risk 1% of equity per trade
                                # Lower = more trades survive drawdown periods
 
 # ================================================================

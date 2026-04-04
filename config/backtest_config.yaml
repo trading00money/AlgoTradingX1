@@ -4,7 +4,7 @@
 symbol: "XAUUSD"
 # Note: Yahoo 15m data is limited to ~60 days. Keep this range recent
 # unless MT5 historical data is available.
-start_date: "2025-04-01"
+start_date: "2021-01-01"
 end_date: "2026-04-01"
 timeframe: "1h"
 
