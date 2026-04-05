@@ -33,6 +33,15 @@ class RiskManager:
         atr_period = self.config.get("atr_period", 14)
         self.price_data['atr'] = calculate_atr(self.price_data, period=atr_period)
 
+        # Volatility-adaptive SL: rolling ATR percentile over 200 bars
+        if self.config.get("vol_adaptive_sl", False):
+            self.price_data['atr_pct'] = (
+                self.price_data['atr']
+                .rolling(200, min_periods=50)
+                .rank(pct=True)
+            )
+            logger.info("Volatility-adaptive SL enabled (ATR percentile computed).")
+
     def get_exit_levels(
         self,
         entry_price: float,
@@ -64,10 +73,27 @@ class RiskManager:
                 logger.warning(f"ATR not available for {timestamp}. Falling back to percentage SL.")
                 sl_method = "percentage" # Fallback
             else:
+                # Volatility-adaptive: scale multiplier down during high-vol regimes
+                if self.config.get("vol_adaptive_sl", False) and 'atr_pct' in self.price_data.columns:
+                    atr_pct = self.price_data.at[timestamp, 'atr_pct']
+                    vol_threshold = self.config.get("vol_adaptive_percentile", 70) / 100.0
+                    min_mult = self.config.get("vol_adaptive_min_multiplier", 1.5)
+                    if not pd.isna(atr_pct) and atr_pct > vol_threshold:
+                        # Linear scale: at threshold→full mult, at 100th pct→min_mult
+                        scale = (1.0 - atr_pct) / (1.0 - vol_threshold)
+                        atr_multiplier = min_mult + (atr_multiplier - min_mult) * scale
+
+                sl_distance = atr_value * atr_multiplier
+
+                # Cap maximum SL distance (prevents outsized losses in extreme vol)
+                max_sl = self.config.get("max_sl_distance", 0)
+                if max_sl > 0 and sl_distance > max_sl:
+                    sl_distance = max_sl
+
                 if trade_side == 'long':
-                    stop_loss = entry_price - (atr_value * atr_multiplier)
+                    stop_loss = entry_price - sl_distance
                 else: # short
-                    stop_loss = entry_price + (atr_value * atr_multiplier)
+                    stop_loss = entry_price + sl_distance
 
         if sl_method == "percentage": # Default or fallback
             sl_pct = self.config.get("stop_loss_percentage", 2.0) / 100

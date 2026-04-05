@@ -865,9 +865,21 @@ class AISignalEngine:
         hour = data.index.hour
         session_ok = (hour >= 7) & (hour < 20)
 
-        # ── Combined regime ──────────────────────────────────────────────────
-        regime_bull = bull_regime & d1_bull & di_bull & (adx > 15) & session_ok
-        regime_bear = bear_regime & d1_bear & di_bear & (adx > 15) & session_ok
+        # ── Volatility regime filter (optional) ──────────────────────────────
+        # During extreme vol (ATR > 80th pct), require ADX > 25 instead of 15.
+        # Helps on 5yr data with 2021-2022 volatility. Neutral on calm windows.
+        adx_min = 15
+        if self.config.get("high_vol_adx_filter", False):
+            atr_pct = atr.rolling(200, min_periods=50).rank(pct=True)
+            high_vol = atr_pct > 0.80
+            adx_threshold = pd.Series(float(adx_min), index=data.index)
+            adx_threshold = adx_threshold.where(~high_vol, 25.0)
+        else:
+            adx_threshold = adx_min
+
+        # ── Combined regime ──────────────────────────────────────────────────────
+        regime_bull = bull_regime & d1_bull & di_bull & (adx > adx_threshold) & session_ok
+        regime_bear = bear_regime & d1_bear & di_bear & (adx > adx_threshold) & session_ok
 
         # ══════════════════════════════════════════════════════════════════════
         # EHLERS STATE CONFIRMATION (not crossovers — direction state only)
@@ -895,19 +907,16 @@ class AISignalEngine:
         # ══════════════════════════════════════════════════════════════════════
         # PULLBACK ENTRY TRIGGER
         # ══════════════════════════════════════════════════════════════════════
-        # Long: price pulls back to EMA20 zone, holds support, bullish candle
+        # ── Pullback zones ───────────────────────────────────────────────────
         pullback_zone_bull = (low <= ema20 + 0.5 * atr) & (low >= ema20 - 1.0 * atr)
-        held_support_bull  = close > ema20  # closed above support
-        bullish_candle     = close > opn     # bullish bar
+        held_support_bull  = close > ema20
 
-        # Short: price rallies to EMA20 zone, rejected, bearish candle
         pullback_zone_bear = (high >= ema20 - 0.5 * atr) & (high <= ema20 + 1.0 * atr)
         held_resistance_bear = close < ema20
-        bearish_candle       = close < opn
 
         # ── Combine trigger + state + regime ─────────────────────────────────
-        buy_signal  = pullback_zone_bull & held_support_bull & bullish_candle & ehlers_bull & regime_bull
-        sell_signal = pullback_zone_bear & held_resistance_bear & bearish_candle & ehlers_bear & regime_bear
+        buy_signal  = pullback_zone_bull & held_support_bull & ehlers_bull & regime_bull
+        sell_signal = pullback_zone_bear & held_resistance_bear & ehlers_bear & regime_bear
 
         # ══════════════════════════════════════════════════════════════════════
         # DIAGNOSTICS
@@ -931,7 +940,7 @@ class AISignalEngine:
         choices    = [SignalType.BUY.value, SignalType.SELL.value]
         raw_signal = np.select(conditions, choices, default=SignalType.HOLD.value)
 
-        # ── 5-bar global cooldown (pullbacks are slower, need wider gap) ─────
+        # ── 5-bar cooldown ───────────────────────────────────────────────────
         signal_col      = raw_signal.copy()
         last_signal_bar = -999
         for i in range(len(signal_col)):
@@ -951,8 +960,8 @@ class AISignalEngine:
         ehlers_bear_count = mama_bear.astype(int) + itrend_bear.astype(int) + ebsw_bear.astype(int)
         fast_bull = ehlers_bull_count >= 2  # majority bullish
         fast_bear = ehlers_bear_count >= 2  # majority bearish
-        regime_state = np.where(fast_bull, 1, np.where(fast_bear, -1, 0))
-        signals_df['regime'] = regime_state
+        raw_regime = np.where(fast_bull, 1, np.where(fast_bear, -1, 0))
+        signals_df['regime'] = raw_regime
 
         n_signals = (signals_df['signal'] != SignalType.HOLD.value).sum()
         logger.info(

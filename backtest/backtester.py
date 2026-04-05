@@ -35,11 +35,62 @@ class Backtester:
         self.trail_atr_mult = self.risk_config.get("trailing_atr_multiplier", 2.5)
         self.trail_activation_r = self.risk_config.get("trailing_activation_r", 1.0)
 
+        # Time stop: exit trades that haven't reached min_profit_r within max_bars
+        self.time_stop_enabled = self.risk_config.get("time_stop_enabled", False)
+        self.time_stop_bars = self.risk_config.get("time_stop_bars", 48)
+        self.time_stop_min_r = self.risk_config.get("time_stop_min_r", 0.5)
+
+        # Breakeven stop: move SL to entry after reaching activation_r profit
+        self.breakeven_enabled = self.risk_config.get("breakeven_stop_enabled", False)
+        self.breakeven_activation_r = self.risk_config.get("breakeven_activation_r", 1.0)
+        self.breakeven_buffer_r = self.risk_config.get("breakeven_buffer_r", 0.1)
+
+        # Short-side regime filter (disabled by default — see risk_config notes).
+        self.short_regime_filter = self.risk_config.get("short_regime_filter_enabled", False)
+
+        # Asymmetric short sizing: multiply sizing_capital by this scale for
+        # short entries.  1.0 = same size as longs.  0.5 = half size on shorts.
+        # Reduces short-side drag on XAUUSD without removing short trades entirely.
+        self.short_size_scale = float(self.risk_config.get("short_size_scale", 1.0))
+
+        # Partial profit exit: close a fraction of the position when unrealized
+        # profit reaches partial_exit_r multiples of initial risk, then move SL
+        # to breakeven.  Locks in gains on winning trades that never hit full TP.
+        self.partial_exit_enabled = self.risk_config.get("partial_exit_enabled", False)
+        self.partial_exit_r = self.risk_config.get("partial_exit_r", 2.0)
+        self.partial_exit_pct = self.risk_config.get("partial_exit_pct", 0.5)
+        self.partial_exit_move_be = self.risk_config.get("partial_exit_move_be", True)
+
         logger.info(f"Backtester initialized with initial capital: ${self.initial_capital:,.2f}")
         if self.trailing_enabled:
             logger.info(
                 f"Trailing stop: ON  activation={self.trail_activation_r}R  "
                 f"trail={self.trail_atr_mult}×ATR"
+            )
+        if self.breakeven_enabled:
+            logger.info(
+                f"Breakeven stop: ON  activation={self.breakeven_activation_r}R  "
+                f"buffer={self.breakeven_buffer_r}R"
+            )
+        if self.time_stop_enabled:
+            logger.info(
+                f"Time stop: ON  bars={self.time_stop_bars}  "
+                f"min_r={self.time_stop_min_r}R"
+            )
+        regime_min_r = self.risk_config.get("regime_exit_min_r", None)
+        if regime_min_r is not None:
+            logger.info(
+                f"Smart regime exit: ON  min_r={regime_min_r}R  "
+                f"(winners above {regime_min_r}R continue under trailing stop)"
+            )
+        if self.short_regime_filter:
+            logger.info("Short regime filter: ON  (shorts only entered when regime < 0)")
+        if self.short_size_scale < 1.0:
+            logger.info(f"Asymmetric short sizing: ON  short_size_scale={self.short_size_scale:.2f}")
+        if self.partial_exit_enabled:
+            logger.info(
+                f"Partial exit: ON  trigger={self.partial_exit_r}R  "
+                f"size={self.partial_exit_pct:.0%}  move_BE={self.partial_exit_move_be}"
             )
 
     def _apply_slippage(self, price: float, side: str) -> float:
@@ -83,8 +134,19 @@ class Backtester:
         if has_regime:
             data['regime'] = signals['regime'].reindex(data.index).fillna(0).astype(int)
 
-        # Pre-compute ATR for trailing stop
+        # Pre-compute ATR for trailing stop and vol-adaptive sizing
         atr_series = calculate_atr(data, period=self.risk_config.get("atr_period", 14))
+
+        # Vol-adaptive position sizing: scale equity down during high-vol
+        vol_sizing_enabled = self.risk_config.get("vol_adaptive_sizing", False)
+        if vol_sizing_enabled:
+            atr_pct_series = atr_series.rolling(200, min_periods=50).rank(pct=True)
+            vol_sizing_threshold = self.risk_config.get("vol_sizing_percentile", 70) / 100.0
+            vol_sizing_min_scale = self.risk_config.get("vol_sizing_min_scale", 0.5)
+            logger.info(
+                f"Vol-adaptive sizing: ON  threshold={vol_sizing_threshold:.0%}  "
+                f"min_scale={vol_sizing_min_scale}"
+            )
 
         for i, row in data.iterrows():
             timestamp = row.name
@@ -124,6 +186,90 @@ class Backtester:
                         self.position['min_favorable'] = min(self.position['min_favorable'], row.low)
                         self.position['prev_min_favorable'] = self.position['min_favorable']
 
+                # ── Breakeven stop (uses PREVIOUS bar's extremes) ──────
+                if self.breakeven_enabled and not self.position.get('breakeven_hit'):
+                    entry_price = self.position['entry_price']
+                    initial_risk = self.position['initial_risk']
+                    prev_best = self.position.get('prev_max_favorable', entry_price)
+                    prev_worst = self.position.get('prev_min_favorable', entry_price)
+
+                    if self.position['side'] == 'long' and initial_risk > 0:
+                        unrealized_r = (prev_best - entry_price) / initial_risk
+                        if unrealized_r >= self.breakeven_activation_r:
+                            be_stop = entry_price + (self.breakeven_buffer_r * initial_risk)
+                            if be_stop > self.position['stop_loss']:
+                                self.position['stop_loss'] = be_stop
+                                self.position['breakeven_hit'] = True
+                    elif self.position['side'] == 'short' and initial_risk > 0:
+                        unrealized_r = (entry_price - prev_worst) / initial_risk
+                        if unrealized_r >= self.breakeven_activation_r:
+                            be_stop = entry_price - (self.breakeven_buffer_r * initial_risk)
+                            if be_stop < self.position['stop_loss']:
+                                self.position['stop_loss'] = be_stop
+                                self.position['breakeven_hit'] = True
+
+                # ── Partial profit exit ──────────────────────────────────
+                # When unrealized profit >= partial_exit_r × initial risk,
+                # close partial_exit_pct of the position at bar close and
+                # optionally move the stop to breakeven on the remainder.
+                # Triggers only once per trade (partial_done flag).
+                if self.partial_exit_enabled and not self.position.get('partial_done'):
+                    entry_price = self.position['entry_price']
+                    initial_risk = self.position['initial_risk']
+                    if initial_risk > 0:
+                        if self.position['side'] == 'long':
+                            current_r = (row.close - entry_price) / initial_risk
+                        else:
+                            current_r = (entry_price - row.close) / initial_risk
+
+                        if current_r >= self.partial_exit_r:
+                            partial_size = self.position['size'] * self.partial_exit_pct
+                            pnl_per_unit = (
+                                row.close - entry_price
+                                if self.position['side'] == 'long'
+                                else entry_price - row.close
+                            )
+                            partial_pnl = pnl_per_unit * partial_size
+
+                            # Apply slippage and commission on partial exit
+                            partial_exit_price = self._apply_slippage(
+                                row.close,
+                                'short' if self.position['side'] == 'long' else 'long'
+                            )
+                            self.capital += partial_pnl
+                            partial_commission = self._apply_commission(
+                                partial_exit_price * partial_size
+                            )
+
+                            self.trades.append({
+                                **self.position,
+                                'size': partial_size,
+                                'exit_price': partial_exit_price,
+                                'exit_date': timestamp,
+                                'pnl': partial_pnl - partial_commission,
+                                'commission': partial_commission,
+                                'reason': 'Partial Exit',
+                                'risk_per_unit': initial_risk,
+                                'planned_rr': self.risk_config.get('risk_reward_ratio', None),
+                                'realized_r': current_r,
+                            })
+
+                            # Reduce remaining size
+                            self.position['size'] -= partial_size
+                            self.position['partial_done'] = True
+
+                            # Move stop to breakeven on the remainder
+                            if self.partial_exit_move_be:
+                                buffer = self.risk_config.get('breakeven_buffer_r', 0.1) * initial_risk
+                                if self.position['side'] == 'long':
+                                    be_stop = entry_price + buffer
+                                    if be_stop > self.position['stop_loss']:
+                                        self.position['stop_loss'] = be_stop
+                                else:
+                                    be_stop = entry_price - buffer
+                                    if be_stop < self.position['stop_loss']:
+                                        self.position['stop_loss'] = be_stop
+
                 # ── Check SL / TP hits ───────────────────────────────────
                 if self.position['side'] == 'long':
                     if row.low <= self.position['stop_loss']:
@@ -137,13 +283,49 @@ class Backtester:
                     elif row.low <= self.position['take_profit']:
                         exit_price, exit_reason = self.position['take_profit'], 'Take Profit'
 
-                # ── Regime-based exit: close when trend regime ends ───────
+                # ── Regime-based exit: smart filter ─────────────────────
+                # Only exit on regime change if trade is below regime_exit_min_r.
+                # Winning trades above threshold continue under trailing stop.
                 if not exit_reason and has_regime:
                     regime_val = row.get('regime', 0) if hasattr(row, 'get') else data.at[timestamp, 'regime']
+                    regime_conflict = False
                     if self.position['side'] == 'long' and regime_val <= 0:
-                        exit_price, exit_reason = row.close, 'Regime Exit'
+                        regime_conflict = True
                     elif self.position['side'] == 'short' and regime_val >= 0:
-                        exit_price, exit_reason = row.close, 'Regime Exit'
+                        regime_conflict = True
+
+                    if regime_conflict:
+                        regime_min_r = self.risk_config.get("regime_exit_min_r", None)
+                        if regime_min_r is None:
+                            # Legacy: always exit on regime change
+                            exit_price, exit_reason = row.close, 'Regime Exit'
+                        else:
+                            entry_price = self.position['entry_price']
+                            initial_risk = self.position['initial_risk']
+                            if initial_risk > 0:
+                                if self.position['side'] == 'long':
+                                    current_r = (row.close - entry_price) / initial_risk
+                                else:
+                                    current_r = (entry_price - row.close) / initial_risk
+                            else:
+                                current_r = 0
+                            if current_r < regime_min_r:
+                                exit_price, exit_reason = row.close, 'Regime Exit'
+                            # else: trade continues — trailing stop / SL / TP will handle
+
+                # ── Time stop: exit stale trades that haven't moved ──────
+                if not exit_reason and self.time_stop_enabled:
+                    self.position['bars_held'] = self.position.get('bars_held', 0) + 1
+                    if self.position['bars_held'] >= self.time_stop_bars:
+                        entry_price = self.position['entry_price']
+                        initial_risk = self.position['initial_risk']
+                        if initial_risk > 0:
+                            if self.position['side'] == 'long':
+                                current_r = (row.close - entry_price) / initial_risk
+                            else:
+                                current_r = (entry_price - row.close) / initial_risk
+                            if current_r < self.time_stop_min_r:
+                                exit_price, exit_reason = row.close, 'Time Stop'
 
                 if exit_reason:
                     # Apply slippage to exit price
@@ -186,6 +368,17 @@ class Backtester:
                     # HOLD or unrecognised value — record equity and move on
                     self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
                     continue
+
+                # ── Short-side regime filter ─────────────────────────────
+                # Only take short trades when the regime is explicitly bearish
+                # (regime < 0).  Neutral regime (0) is treated as long-only
+                # territory, consistent with XAUUSD's structural upward bias.
+                if trade_side == 'short' and self.short_regime_filter and has_regime:
+                    regime_val = row.get('regime', 0) if hasattr(row, 'get') else data.at[timestamp, 'regime']
+                    if regime_val >= 0:
+                        self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
+                        continue
+
                 entry_price = self._apply_slippage(row.close, trade_side)
 
                 exit_levels = risk_manager.get_exit_levels(entry_price, trade_side, timestamp)
@@ -221,7 +414,22 @@ class Backtester:
                     )
                     diag_logged += 1
 
-                size = portfolio_manager.calculate_position_size(self.capital, entry_price, stop_loss)
+                # Vol-adaptive sizing: scale equity down during high-vol regimes
+                sizing_capital = self.capital
+                if vol_sizing_enabled:
+                    atr_pct = atr_pct_series.at[timestamp] if timestamp in atr_pct_series.index else 0
+                    if not pd.isna(atr_pct) and atr_pct > vol_sizing_threshold:
+                        scale = vol_sizing_min_scale + (1.0 - vol_sizing_min_scale) * (
+                            (1.0 - atr_pct) / (1.0 - vol_sizing_threshold)
+                        )
+                        sizing_capital = self.capital * max(scale, vol_sizing_min_scale)
+
+                # Asymmetric short sizing: reduce risk on short trades to account
+                # for XAUUSD's structural long bias without removing them entirely.
+                if trade_side == 'short' and self.short_size_scale < 1.0:
+                    sizing_capital = sizing_capital * self.short_size_scale
+
+                size = portfolio_manager.calculate_position_size(sizing_capital, entry_price, stop_loss)
                 if size > 0:
                     # Apply commission on entry
                     entry_trade_value = entry_price * size

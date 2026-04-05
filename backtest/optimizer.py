@@ -145,22 +145,31 @@ class StrategyOptimizer:
         price_data: pd.DataFrame,
         param_grid: Dict[str, List],
         backtest_func: Callable,
-        train_period: int = 252,  # 1 year
-        test_period: int = 63,    # 3 months
+        train_period: int = 6048,  # 1 year of 1H bars (252 days × 24 bars)
+        test_period: int = 1512,   # 3 months of 1H bars (63 days × 24 bars)
         **kwargs
     ) -> List[Dict]:
         """
         Walk-forward optimization for out-of-sample testing.
-        
+
         Args:
-            price_data: Full price history
-            param_grid: Parameters to optimize
-            backtest_func: Backtesting function
-            train_period: Training window size in bars
-            test_period: Testing window size in bars
-            
+            price_data: Full price history.
+            param_grid: Parameters to optimize.
+            backtest_func: Backtesting function.
+            train_period: Training window in bars. Default 6048 = 1 year of 1H bars
+                (252 trading days × 24 bars/day). For daily data use 252.
+            test_period: Out-of-sample test window in bars. Default 1512 = 3 months
+                of 1H bars (63 trading days × 24 bars/day). For daily data use 63.
+
         Returns:
-            List of optimization results for each period
+            List of optimization results for each walk-forward period, each
+            containing train_start, train_end, test_start, test_end,
+            best_params, train_score, and test_score.
+
+        Note:
+            The ratio of train_score / test_score across all periods is a key
+            robustness indicator. A healthy strategy shows test_score / train_score
+            >= 0.6 consistently. Ratios below 0.4 indicate overfitting.
         """
         logger.info("Starting walk-forward optimization")
         
@@ -195,12 +204,28 @@ class StrategyOptimizer:
                 'test_score': test_score
             })
             
-            logger.info(f"Period {len(results)}: Train={train_score:.4f}, Test={test_score:.4f}")
-            
+            efficiency = test_score / train_score if train_score > 0 else float('nan')
+            logger.info(
+                f"Period {len(results)}: Train={train_score:.4f}  "
+                f"Test={test_score:.4f}  Efficiency={efficiency:.2f}"
+                + (" ⚠ possible overfit" if efficiency < 0.4 else "")
+            )
+
             # Move forward
             current_start += test_period
-        
-        logger.success(f"Walk-forward optimization complete. {len(results)} periods evaluated.")
+
+        if results:
+            efficiencies = [
+                r['test_score'] / r['train_score']
+                for r in results
+                if r['train_score'] > 0
+            ]
+            avg_eff = float(np.mean(efficiencies)) if efficiencies else float('nan')
+            logger.success(
+                f"Walk-forward complete: {len(results)} periods  "
+                f"avg efficiency={avg_eff:.2f}  "
+                f"({'robust' if avg_eff >= 0.6 else 'possible overfit — review params'})"
+            )
         return results
     
     def _count_combinations(self, param_grid: Dict) -> int:
@@ -235,6 +260,112 @@ class StrategyOptimizer:
                 'summary': self.get_optimization_report()
             }, f, indent=2, default=str)
         logger.info(f"Results saved to {filepath}")
+
+
+def walk_forward_backtest(
+    price_data: pd.DataFrame,
+    signals: pd.DataFrame,
+    base_config: Dict,
+    param_grid: Dict[str, List],
+    train_period: int = 6048,
+    test_period: int = 1512,
+    score_metric: str = 'sharpe',
+) -> List[Dict]:
+    """
+    Convenience function that wires the Backtester and metrics into
+    walk_forward_optimize, handling signal slicing automatically.
+
+    Each walk-forward fold:
+      1. Trains (grid-searches param_grid) on an in-sample window.
+      2. Tests the best params on the immediately following OOS window.
+      3. Reports efficiency = test_score / train_score for each fold.
+
+    Args:
+        price_data:   Full OHLCV DataFrame with a DatetimeIndex.
+        signals:      Signals DataFrame aligned to price_data's index,
+                      containing at minimum a 'signal' column and optionally
+                      a 'regime' column.
+        base_config:  Full config dict (keys: 'risk_config', 'backtest_config').
+                      param_grid values override 'risk_config' keys each fold.
+        param_grid:   Dict of risk_config keys to test, e.g.:
+                        {'atr_multiplier': [2.0, 2.5, 3.0],
+                         'risk_reward_ratio': [4.0, 5.0]}
+        train_period: IS window in bars. Default 6048 = 1 year × 1H bars.
+        test_period:  OOS window in bars. Default 1512 = 3 months × 1H bars.
+        score_metric: Metric to optimise. One of 'sharpe' | 'calmar' |
+                      'profit_factor'. Default 'sharpe'.
+
+    Returns:
+        List of dicts, one per fold:
+          train_start, train_end, test_start, test_end,
+          best_params, train_score, test_score, efficiency.
+
+    Usage:
+        results = walk_forward_backtest(
+            price_data=df,
+            signals=signals_df,
+            base_config=config,
+            param_grid={
+                'atr_multiplier':    [2.0, 2.5, 3.0],
+                'risk_reward_ratio': [4.0, 5.0],
+            },
+        )
+        # Healthy strategy: avg efficiency >= 0.6 across all folds.
+    """
+    # Deferred imports to avoid circular dependency at module level.
+    from backtest.backtester import Backtester
+    from backtest.metrics import calculate_performance_metrics
+
+    _SCORE_KEY = {
+        'sharpe':        'Sharpe Ratio',
+        'calmar':        'Calmar Ratio',
+        'profit_factor': 'Profit Factor',
+    }
+    metric_key = _SCORE_KEY.get(score_metric, 'Sharpe Ratio')
+
+    def _backtest_slice(data_slice: pd.DataFrame, params: Dict) -> float:
+        """Run one backtest fold and return the chosen score metric."""
+        config = {
+            **base_config,
+            'risk_config': {**base_config.get('risk_config', {}), **params},
+        }
+        bt = Backtester(config)
+        # Signals are reindexed to the exact date range of this fold's data.
+        signals_slice = signals.reindex(data_slice.index)
+        results = bt.run(data_slice, signals_slice)
+
+        if results['trades'].empty:
+            return 0.0
+
+        metrics = calculate_performance_metrics(
+            results['equity_curve'],
+            results['trades'],
+            results['initial_capital'],
+            run_mc=False,   # skip MC inside each fold — too slow
+        )
+        score = float(metrics.get(metric_key, 0.0))
+        # Guard against inf/nan from folds with very few trades
+        return score if np.isfinite(score) else 0.0
+
+    optimizer = StrategyOptimizer(
+        {'optimizer_config': {'method': 'grid_search', 'optimization_metric': score_metric}}
+    )
+    raw_results = optimizer.walk_forward_optimize(
+        price_data=price_data,
+        param_grid=param_grid,
+        backtest_func=_backtest_slice,
+        train_period=train_period,
+        test_period=test_period,
+    )
+
+    # Attach efficiency ratio to each result for convenience
+    for r in raw_results:
+        r['efficiency'] = (
+            r['test_score'] / r['train_score']
+            if r['train_score'] > 0
+            else float('nan')
+        )
+    return raw_results
 
 
 # Example usage

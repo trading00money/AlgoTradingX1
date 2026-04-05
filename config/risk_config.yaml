@@ -18,24 +18,83 @@ version: "3.0.0"
 # Stop loss: use ATR-based stops, not fixed percentage
 stop_loss_method: "atr"       # "atr" | "percentage"
 atr_period: 14
-atr_multiplier: 2.5           # Stop = 2.5 × ATR (wider: reduces false stop-outs on H1 gold)
-                               # Gives MACD momentum entries room to develop before SL
+atr_multiplier: 3.0           # Stop = 3.0 × ATR — walk-forward selected 7/16 folds
+
+# Volatility-adaptive SL: scale multiplier down during high-vol regimes
+# Prevents outsized dollar-losses when ATR spikes (e.g. 2021-2022 rate hikes)
+vol_adaptive_sl: true
+vol_adaptive_percentile: 70    # Start scaling down above 70th ATR percentile
+vol_adaptive_min_multiplier: 1.5  # Floor multiplier at extreme vol
+max_sl_distance: 100.0         # Hard cap: max $100/oz SL distance for gold
+
+# High-vol entry filter: require ADX>25 when ATR>80th percentile
+# Toggle ON for 5yr MT5 test if vol-adaptive SL alone isn't enough
+high_vol_adx_filter: false
 
 # Take profit: RR ratio applied to the risk distance
 take_profit_method: "rr_ratio"
-risk_reward_ratio: 5.0        # v5: high TP ceiling + regime exit
-                               # Most exits via regime; few trades reach 5R TP
-                               # Regime exit: avg_loss ~$440, TP hits pull avg_win up
+risk_reward_ratio: 5.0        # v5: high TP ceiling + regime exit is correct framework
+                               # RR=3.0 tested: PF dropped 1.96→1.68 (regime exits lost value)
+                               # Regime exit captures +3-4R sweet spot; 5R TP is ceiling only
+
+# Breakeven stop: move SL to entry+buffer after reaching activation_r
+# DISABLED: on 5yr MT5, cuts avg_win more than avg_loss (PF 1.90→1.83)
+breakeven_stop_enabled: false
+breakeven_activation_r: 1.0
+# 0.3R buffer (≈ $75 on a $250 XAUUSD risk unit) keeps the stop clear of normal
+# bar noise on gold. 0.1R was too tight — regular retracements hit BE before price
+# could resume toward full TP, cutting winners prematurely.
+breakeven_buffer_r: 0.3
 
 # Trailing stop (backtester reads these directly)
-trailing_stop_enabled: false
-trailing_atr_multiplier: 3.0  # Trail at 3.0×ATR (wide — gives H1 gold room)
-trailing_activation_r: 2.0    # Activate after 2R profit (let winners develop first)
+# Time stop: exit trades that stagnate (haven't reached min_r within N bars)
+# Catches sideways losers early, reducing avg_loss significantly
+time_stop_enabled: true
+time_stop_bars: 30             # 30 H1 bars ≈ 1.25 trading days
+time_stop_min_r: 0.0           # Cut any trade still underwater after 30 bars
+                               # Targets: converting SL losses (-$1,758) to smaller time stop losses
+
+trailing_stop_enabled: false   # Tested on MT5 5yr: hurts PF at all settings tested
+trailing_atr_multiplier: 3.0
+trailing_activation_r: 1.0
 
 # Position sizing (PortfolioManager)
 sizing_method: "fixed_fractional"
-risk_percentage: 1.0           # Risk 0.5% of equity per trade
+risk_percentage: 1.0           # Risk 1% of equity per trade
                                # Lower = more trades survive drawdown periods
+
+# Vol-adaptive position sizing: reduce size during high-vol regimes
+# DISABLED: on 5yr MT5, reduces avg_win more than avg_loss (-18% vs -15%)
+vol_adaptive_sizing: false
+vol_sizing_percentile: 70
+vol_sizing_min_scale: 0.5
+
+# Smart regime exit: only close trade on regime change if unrealized R < threshold
+# null/absent = legacy (always exit). Tested 0.0 and 1.0: both hurt PF.
+# regime_exit_min_r: null  # disabled — legacy regime exit is correct
+
+# Short-side regime filter: disabled — filtering by regime < 0 actually worsened
+# short PF (1.45 → 1.29) because it removed neutral-regime shorts that were
+# profitable and left only high-volatility bearish ones with lower avg win.
+short_regime_filter_enabled: false
+
+# Short-side asymmetric sizing: risk only short_size_scale × normal risk on
+# short trades.  Keeps shorts in the mix (they add diversification and some
+# alpha) while limiting their drag on the overall equity curve.
+# 0.5 = half the normal 1% risk → effectively 0.5% risk per short trade.
+short_size_scale: 0.5
+
+# Partial profit exit: close partial_exit_pct of the position when unrealized
+# profit reaches partial_exit_r × initial risk, then move stop to breakeven.
+# Converts stalled winners into locked-in gains instead of regime-exit losses.
+# partial_exit_pct = 0.5 means close 50% at 2R, let the other 50% run to TP/SL.
+partial_exit_enabled: true
+# 3.0R trigger: at a 5R TP target, 2R is too early — the trade hasn't cleared
+# the halfway mark and partial exits were cannibalising the best winners.
+# 3R = 60% of the way to TP; enough confirmation the trade is working.
+partial_exit_r: 3.0        # Close partial position at 3R unrealized profit (was 2.0)
+partial_exit_pct: 0.5      # Close 50% of position at trigger
+partial_exit_move_be: true # Move remaining stop to breakeven after partial exit
 
 # ================================================================
 # POSITION SIZING
