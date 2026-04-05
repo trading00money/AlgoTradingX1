@@ -776,47 +776,49 @@ class AISignalEngine:
     
     def generate_signals_for_backtest(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        MACD Zero-Cross + EMA200 Regime + D1 EMA50 HTF Filter + DI Directional + Histogram Magnitude
-        XAUUSD H1 — target PF ≥ 2.5, robust across multi-year periods
+        Pullback Entry Strategy v5  —  XAUUSD H1
+        Target: PF ≥ 2.5
 
-        WHAT CHANGED FROM v1 (PF=1.30, WR=35%)
-        ========================================
-        v1 problem: 37 losers came from three sources:
-          a) Counter-regime MACD crosses: histogram flips up but EMA200 slope
-             is still negative — entering against the multi-day trend bias.
-          b) Counter-directional pressure: plus_di < minus_di at entry means
-             sellers are still dominant even though histogram just crossed up.
-          c) Noise crosses: histogram oscillates near zero producing tiny flips
-             with no genuine momentum behind them.
+        ARCHITECTURE (fundamentally different from crossover v1-v4)
+        ===========================================================
+        Instead of entering on indicator crossovers (timing problem),
+        enter on PULLBACKS TO DYNAMIC SUPPORT within confirmed trends.
 
-        NEW FILTERS
-        ===========
-        1. EMA200 regime gate (H1: EMA200 ≈ 8.3 trading days = "weekly" bias)
-           BUY only when close > EMA200 AND EMA200 slope (vs 20 bars ago) > 0.
-           SELL only when close < EMA200 AND EMA200 slope < 0.
-           This blocks entering against the dominant multi-day trend direction.
+        Entry trigger (long):
+          - Price pulls back to EMA20 zone (low within 0.5×ATR of EMA20)
+          - Bullish rejection: close > EMA20 (held support)
+          - Momentum resumption: close > open (bullish candle)
 
-        2. DI directional confirmation (plus_di > minus_di + 3 for buys)
-           Forces actual buying pressure to dominate at point of entry.
-           Buffer of 3 prevents marginal DI crossovers from qualifying.
+        Ehlers state confirmation (all must be true):
+          - MAMA > FAMA (adaptive trend bullish)
+          - ITrend > ITrend_trigger (DSP trendline bullish)
+          - EBSW > -0.5 (not in cycle downturn)
 
-        3. Histogram cross magnitude > 0.15 × ATR
-           Eliminates "noise crosses" where the histogram barely grazes zero.
-           Only enter when the cross has enough energy behind it.
+        Regime gate:
+          - H1 EMA200 + slope > 0
+          - D1 EMA50 price-only
+          - DI directional +1 buffer
+          - ADX > 15 (moderate trend required)
+          - London+NY session (07:00-20:00 UTC)
 
-        4. RSI pullback confirmation: RSI was below 50 in last 4 bars (buys)
-           Ensures the MACD cross follows a genuine momentum dip, not a
-           continuation of an already-overbought push.
+        Why this should have higher WR:
+          - Entering at support (pullback low) gives better entry price
+          - Entry price is close to where SL would be placed → tighter risk
+          - Trend continuation from support is statistically more reliable
+            than crossover timing
+          - Ehlers STATE filters (not crossovers) confirm direction without
+            timing noise
 
-        MATH TARGET
-        ===========
-        At WR=45%, delivered RR=3.0:  PF = 0.45×3.0/0.55 = 2.45 ✓
-        At WR=50%, delivered RR=3.0:  PF = 0.50×3.0/0.50 = 3.00 ✓
-        RR config=3.5 → delivered ~3.0 (0.5R lost to slippage+commission).
+        5-bar global cooldown between entries.
         """
+        from modules.ehlers.mama import mama
+        from modules.ehlers.instantaneous_trendline import InstantaneousTrendline
+        from modules.ehlers.sinewave_indicator import even_better_sinewave
+
         close = data['close']
         high  = data['high']
         low   = data['low']
+        opn   = data['open']
 
         # ── ATR (14-period EMA) ───────────────────────────────────────────────
         tr = pd.concat([
@@ -826,58 +828,28 @@ class AISignalEngine:
         ], axis=1).max(axis=1)
         atr = tr.ewm(alpha=1/14, adjust=False).mean()
 
-        # ── MACD (12, 26, 9) ─────────────────────────────────────────────────
-        ema12       = close.ewm(span=12, adjust=False).mean()
-        ema26       = close.ewm(span=26, adjust=False).mean()
-        macd_line   = ema12 - ema26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        histogram   = macd_line - signal_line
+        # ── EMA20 (pullback target) ──────────────────────────────────────────
+        ema20 = close.ewm(span=20, adjust=False).mean()
 
-        # Zero-cross events (single-bar transition)
-        hist_cross_up   = (histogram > 0) & (histogram.shift(1) <= 0)
-        hist_cross_down = (histogram < 0) & (histogram.shift(1) >= 0)
+        # ══════════════════════════════════════════════════════════════════════
+        # REGIME GATE
+        # ══════════════════════════════════════════════════════════════════════
 
-        # ── Filter 3: Histogram cross magnitude ───────────────────────────────
-        # The absolute value of the histogram on the cross bar must exceed
-        # 0.05 × ATR. Relaxed from 0.15 — eliminates only the truly flat crosses.
-        cross_magnitude_ok_up   = histogram.abs() > (0.05 * atr)   # restored: H1-validated threshold
-        cross_magnitude_ok_down = histogram.abs() > (0.05 * atr)
-
-        # ── EMA stack (medium-term) ───────────────────────────────────────────
-        ema55  = close.ewm(span=55,  adjust=False).mean()
-        ema100 = close.ewm(span=100, adjust=False).mean()
-
-        # ── Filter 1: EMA200 regime gate (macro weekly bias) ─────────────────
-        # H1: EMA200 = ~200 hours = ~8.3 trading days
+        # ── H1 EMA200 regime (weekly trend bias) ─────────────────────────────
         ema200       = close.ewm(span=200, adjust=False).mean()
-        ema200_slope = ema200 - ema200.shift(20)  # H1: 20 bars = 20h ≈ 1 trading day slope
-
-        # Regime gate: strict — both price side AND slope direction required.
-        # Relaxing slope to allow flat/counter-slope added trades that were
-        # consistently losers (counter-trend entries during EMA200 consolidation).
-        # WR dropped from 40% → 35% when slope was relaxed. Restoring strict gate.
+        ema200_slope = ema200 - ema200.shift(20)
         bull_regime = (close > ema200) & (ema200_slope > 0)
         bear_regime = (close < ema200) & (ema200_slope < 0)
 
-        # ── D1 regime gate (higher-timeframe trend filter) ────────────────────
-        # Resample H1 bars to Daily, compute EMA50 on daily close.
-        # D1 EMA50 ≈ 50 trading days = ~2.5 months intermediate trend.
-        # Forward-fill daily values back to H1 index.
-        # Purpose: block entries when the multi-week trend has turned against us.
-        # This is the filter that distinguishes 2025 (strong bull) from 2021-2024
-        # (ranging or correcting) — the H1 EMA200 alone is too short (~8 days).
-        daily_close  = data['close'].resample('D').last().dropna()
-        d1_ema50     = daily_close.ewm(span=50, adjust=False).mean()
-        d1_slope     = d1_ema50 - d1_ema50.shift(5)  # 5-day slope ≈ 1 trading week
-
+        # ── D1 EMA50 (intermediate trend, price-only) ───────────────────────
+        daily_close    = data['close'].resample('D').last().dropna()
+        d1_ema50       = daily_close.ewm(span=50, adjust=False).mean()
         d1_ema50_h1    = d1_ema50.reindex(data.index, method='ffill')
-        d1_slope_h1    = d1_slope.reindex(data.index, method='ffill')
         daily_close_h1 = daily_close.reindex(data.index, method='ffill')
+        d1_bull = daily_close_h1 > d1_ema50_h1
+        d1_bear = daily_close_h1 < d1_ema50_h1
 
-        d1_bull = (daily_close_h1 > d1_ema50_h1) & (d1_slope_h1 > 0)
-        d1_bear = (daily_close_h1 < d1_ema50_h1) & (d1_slope_h1 < 0)
-
-        # ── ADX + Filter 2: DI Directional Confirmation ───────────────────────
+        # ── ADX + DI ─────────────────────────────────────────────────────────
         up_move   = high - high.shift(1)
         down_move = low.shift(1) - low
         plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
@@ -886,108 +858,105 @@ class AISignalEngine:
         minus_di  = 100 * pd.Series(minus_dm, index=data.index).ewm(alpha=1/14, adjust=False).mean() / atr.replace(0, np.nan)
         dx        = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
         adx       = dx.ewm(alpha=1/14, adjust=False).mean().fillna(0)
+        di_bull   = plus_di  > (minus_di + 1)
+        di_bear   = minus_di > (plus_di  + 1)
 
-        # DI buffer +1 — empirically best WR/frequency balance (WR=36.4%, 22 trades).
-        di_bull = plus_di  > (minus_di + 1)   # buying pressure dominant
-        di_bear = minus_di > (plus_di  + 1)   # selling pressure dominant
+        # ── Session filter (London + NY: 07:00-20:00 UTC) ────────────────────
+        hour = data.index.hour
+        session_ok = (hour >= 7) & (hour < 20)
 
-        # ── RSI ───────────────────────────────────────────────────────────────
-        delta    = close.diff()
-        avg_gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-        avg_loss = (-delta).clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-        rsi      = (100 - (100 / (1 + avg_gain / avg_loss.replace(0, np.nan)))).fillna(50)
+        # ── Combined regime ──────────────────────────────────────────────────
+        regime_bull = bull_regime & d1_bull & di_bull & (adx > 15) & session_ok
+        regime_bear = bear_regime & d1_bear & di_bear & (adx > 15) & session_ok
 
-        # Filter 4: RSI pullback — H1 validated (WR=36.4%, PF=2.53).
-        rsi_was_low  = rsi.rolling(8).min() < 52   # for buys
-        rsi_was_high = rsi.rolling(8).max() > 48   # for sells
+        # ══════════════════════════════════════════════════════════════════════
+        # EHLERS STATE CONFIRMATION (not crossovers — direction state only)
+        # ══════════════════════════════════════════════════════════════════════
+        mama_result = mama(data)
+        mama_line = mama_result['MAMA']
+        fama_line = mama_result['FAMA']
+        mama_bull = mama_line > fama_line
+        mama_bear = mama_line < fama_line
 
-        # ── Per-filter pass counts for diagnostics ───────────────────────────
-        # Each line shows how many bars pass that filter independently.
-        # When a combined condition = 0, compare these to find the bottleneck.
-        _f1u = int(hist_cross_up.sum())
-        _f1d = int(hist_cross_down.sum())
-        _f2u = int((hist_cross_up & cross_magnitude_ok_up).sum())
-        _f2d = int((hist_cross_down & cross_magnitude_ok_down).sum())
-        _f3u = int((hist_cross_up & bull_regime).sum())
-        _f3d = int((hist_cross_down & bear_regime).sum())
-        _f3du = int((hist_cross_up & d1_bull).sum())
-        _f3dd = int((hist_cross_down & d1_bear).sum())
-        _f4u = int((hist_cross_up & di_bull).sum())
-        _f4d = int((hist_cross_down & di_bear).sum())
-        _f5u = int((hist_cross_up & (adx > 20)).sum())
-        _f5d = int((hist_cross_down & (adx > 20)).sum())
-        _f6u = int((hist_cross_up & rsi_was_low).sum())
-        _f6d = int((hist_cross_down & rsi_was_high).sum())
+        itrend_calc = InstantaneousTrendline(alpha=0.07)
+        itrend_result = itrend_calc.calculate(data)
+        itrend_line    = itrend_result['itrend']
+        itrend_trigger = itrend_result['itrend_trigger']
+        itrend_bull = itrend_line > itrend_trigger
+        itrend_bear = itrend_line < itrend_trigger
+
+        ebsw = even_better_sinewave(close)
+        ebsw_bull = ebsw > -0.5   # not in cycle downturn
+        ebsw_bear = ebsw <  0.5   # not in cycle upturn
+
+        ehlers_bull = mama_bull & itrend_bull & ebsw_bull
+        ehlers_bear = mama_bear & itrend_bear & ebsw_bear
+
+        # ══════════════════════════════════════════════════════════════════════
+        # PULLBACK ENTRY TRIGGER
+        # ══════════════════════════════════════════════════════════════════════
+        # Long: price pulls back to EMA20 zone, holds support, bullish candle
+        pullback_zone_bull = (low <= ema20 + 0.5 * atr) & (low >= ema20 - 1.0 * atr)
+        held_support_bull  = close > ema20  # closed above support
+        bullish_candle     = close > opn     # bullish bar
+
+        # Short: price rallies to EMA20 zone, rejected, bearish candle
+        pullback_zone_bear = (high >= ema20 - 0.5 * atr) & (high <= ema20 + 1.0 * atr)
+        held_resistance_bear = close < ema20
+        bearish_candle       = close < opn
+
+        # ── Combine trigger + state + regime ─────────────────────────────────
+        buy_signal  = pullback_zone_bull & held_support_bull & bullish_candle & ehlers_bull & regime_bull
+        sell_signal = pullback_zone_bear & held_resistance_bear & bearish_candle & ehlers_bear & regime_bear
+
+        # ══════════════════════════════════════════════════════════════════════
+        # DIAGNOSTICS
+        # ══════════════════════════════════════════════════════════════════════
         logger.info(
-            f"[MACDv2 DIAG BUY]  cross={_f1u} | +magnitude={_f2u} "
-            f"| +h1_regime={_f3u} | +d1_trend={_f3du} | +di={_f4u} | +adx={_f5u} | +rsi_pb={_f6u}"
+            f"[v5 REGIME] bull_bars={int(regime_bull.sum())} bear_bars={int(regime_bear.sum())} "
+            f"/ {len(data)} total  ehlers_bull={int(ehlers_bull.sum())} ehlers_bear={int(ehlers_bear.sum())}"
         )
         logger.info(
-            f"[MACDv2 DIAG SELL] cross={_f1d} | +magnitude={_f2d} "
-            f"| +h1_regime={_f3d} | +d1_trend={_f3dd} | +di={_f4d} | +adx={_f5d} | +rsi_pb={_f6d}"
+            f"[v5 PULLBACK] zone_bull={int(pullback_zone_bull.sum())} zone_bear={int(pullback_zone_bear.sum())} | "
+            f"held_bull={int(held_support_bull.sum())} held_bear={int(held_resistance_bear.sum())}"
+        )
+        logger.info(
+            f"[v5 COMBINED] buy_signal={int(buy_signal.sum())} sell_signal={int(sell_signal.sum())}"
         )
 
-        # ── Composite Entry Gates ─────────────────────────────────────────────
-        # Relaxed vs prior version:
-        #   - magnitude threshold: 0.15 ATR → 0.05 ATR (less aggressive cutoff)
-        #   - DI buffer: +3 → +2 (slightly looser directional requirement)
-        #   - RSI pullback window: 4 bars → 6 bars (more time for the setup to form)
-        #   - ema55 > ema100 removed from regime (EMA200 alone is sufficient)
-        #   - RSI ceiling raised to 72 for buys (gold can trend at elevated RSI)
-        buy_condition = (
-            hist_cross_up          &   # histogram zero-cross up (1 bar only)
-            cross_magnitude_ok_up  &   # cross has energy (> 0.05 ATR)
-            bull_regime            &   # above H1 EMA200, slope strictly rising
-            d1_bull                &   # above D1 EMA50, daily slope rising (HTF filter)
-            di_bull                &   # plus_di > minus_di + 1
-            (adx > 15)             &   # validated threshold
-            rsi_was_low            &   # RSI dipped < 52 in last 8 bars
-            (rsi < 75)
-        )
-
-        sell_condition = (
-            hist_cross_down         &
-            cross_magnitude_ok_down &
-            bear_regime             &   # below H1 EMA200, slope strictly falling
-            d1_bear                 &   # below D1 EMA50, daily slope falling (HTF filter)
-            di_bear                 &
-            (adx > 15)              &
-            rsi_was_high            &
-            (rsi > 25)
-        )
-
-        # STRONG when MACD line also confirms direction
-        strong_buy  = buy_condition  & (macd_line > 0) & (rsi < 65)
-        strong_sell = sell_condition & (macd_line < 0) & (rsi > 35)
-
-        conditions = [
-            strong_buy,
-            buy_condition  & ~strong_buy,
-            strong_sell,
-            sell_condition & ~strong_sell,
-        ]
-        choices = [
-            SignalType.STRONG_BUY.value,
-            SignalType.BUY.value,
-            SignalType.STRONG_SELL.value,
-            SignalType.SELL.value,
-        ]
+        # ══════════════════════════════════════════════════════════════════════
+        # ASSEMBLE SIGNALS
+        # ══════════════════════════════════════════════════════════════════════
+        conditions = [buy_signal, sell_signal]
+        choices    = [SignalType.BUY.value, SignalType.SELL.value]
         raw_signal = np.select(conditions, choices, default=SignalType.HOLD.value)
 
-        # ── 8-bar cooldown (H1: 8 hours ≈ 1 trading session) ────────────────
+        # ── 5-bar global cooldown (pullbacks are slower, need wider gap) ─────
         signal_col      = raw_signal.copy()
         last_signal_bar = -999
         for i in range(len(signal_col)):
             if signal_col[i] != SignalType.HOLD.value:
-                if (i - last_signal_bar) < 8:
+                if (i - last_signal_bar) < 5:
                     signal_col[i] = SignalType.HOLD.value
                 else:
                     last_signal_bar = i
 
         signals_df = pd.DataFrame({'signal': signal_col}, index=data.index)
+
+        # ── Fast exit regime (Ehlers-based, much faster than EMA200/ADX) ────
+        # Entry uses slow regime (EMA200+DI+ADX) for high selectivity.
+        # Exit uses fast Ehlers regime: any 2 of 3 Ehlers bearish → exit long.
+        # This catches trend reversals 5-15 bars earlier than the slow regime.
+        ehlers_bull_count = mama_bull.astype(int) + itrend_bull.astype(int) + ebsw_bull.astype(int)
+        ehlers_bear_count = mama_bear.astype(int) + itrend_bear.astype(int) + ebsw_bear.astype(int)
+        fast_bull = ehlers_bull_count >= 2  # majority bullish
+        fast_bear = ehlers_bear_count >= 2  # majority bearish
+        regime_state = np.where(fast_bull, 1, np.where(fast_bear, -1, 0))
+        signals_df['regime'] = regime_state
+
         n_signals = (signals_df['signal'] != SignalType.HOLD.value).sum()
         logger.info(
-            f"[MACDv2] FINAL signals={n_signals} / {len(data)} bars "
+            f"[v5 FINAL] signals={n_signals} / {len(data)} bars "
             f"({100*n_signals/max(len(data),1):.2f}%)"
         )
         return signals_df

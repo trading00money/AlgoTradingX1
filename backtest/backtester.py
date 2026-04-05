@@ -3,7 +3,7 @@ import numpy as np
 from loguru import logger
 from typing import Dict, List
 
-from core.risk_manager import RiskManager
+from core.risk_manager import RiskManager, calculate_atr
 from core.portfolio_manager import PortfolioManager
 from core.signal_engine import SignalType
 
@@ -14,6 +14,7 @@ _SHORT_SIGNALS = frozenset({SignalType.SELL.value, SignalType.STRONG_SELL.value}
 class Backtester:
     """
     Runs a vector-based backtest using modular Risk and Portfolio Managers.
+    Supports ATR trailing stop for letting winners run.
     """
     def __init__(self, config: Dict):
         """
@@ -28,7 +29,18 @@ class Backtester:
         self.position = None
         self.trades = []
         self.equity_curve = []
+
+        # Trailing stop configuration (from risk_config)
+        self.trailing_enabled = self.risk_config.get("trailing_stop_enabled", True)
+        self.trail_atr_mult = self.risk_config.get("trailing_atr_multiplier", 2.5)
+        self.trail_activation_r = self.risk_config.get("trailing_activation_r", 1.0)
+
         logger.info(f"Backtester initialized with initial capital: ${self.initial_capital:,.2f}")
+        if self.trailing_enabled:
+            logger.info(
+                f"Trailing stop: ON  activation={self.trail_activation_r}R  "
+                f"trail={self.trail_atr_mult}×ATR"
+            )
 
     def _apply_slippage(self, price: float, side: str) -> float:
         """Applies slippage to the execution price."""
@@ -66,6 +78,14 @@ class Backtester:
         # Reindex so signals align to price data's index; unmatched dates become NaN (no trade).
         data['signal'] = signals['signal'].reindex(data.index)
 
+        # Regime column for regime-based exits (optional)
+        has_regime = 'regime' in signals.columns
+        if has_regime:
+            data['regime'] = signals['regime'].reindex(data.index).fillna(0).astype(int)
+
+        # Pre-compute ATR for trailing stop
+        atr_series = calculate_atr(data, period=self.risk_config.get("atr_period", 14))
+
         for i, row in data.iterrows():
             timestamp = row.name
 
@@ -74,6 +94,37 @@ class Backtester:
                 exit_price = None
                 exit_reason = None
 
+                # ── ATR trailing stop (uses PREVIOUS bar's extremes) ─────
+                # Avoids intra-bar paradox where same bar's high activates
+                # trailing and same bar's low hits the new stop.
+                if self.trailing_enabled:
+                    current_atr = atr_series.at[timestamp] if timestamp in atr_series.index else 0
+                    entry_price = self.position['entry_price']
+                    initial_risk = self.position['initial_risk']
+                    # prev_high/low already captured at end of previous iteration
+                    prev_best = self.position.get('prev_max_favorable', entry_price)
+                    prev_worst = self.position.get('prev_min_favorable', entry_price)
+
+                    if self.position['side'] == 'long':
+                        unrealized_r = (prev_best - entry_price) / initial_risk if initial_risk > 0 else 0
+                        if unrealized_r >= self.trail_activation_r and current_atr > 0:
+                            trail_stop = prev_best - (self.trail_atr_mult * current_atr)
+                            if trail_stop > self.position['stop_loss']:
+                                self.position['stop_loss'] = trail_stop
+                        # Update best price AFTER trailing calc (for next bar)
+                        self.position['max_favorable'] = max(self.position['max_favorable'], row.high)
+                        self.position['prev_max_favorable'] = self.position['max_favorable']
+
+                    elif self.position['side'] == 'short':
+                        unrealized_r = (entry_price - prev_worst) / initial_risk if initial_risk > 0 else 0
+                        if unrealized_r >= self.trail_activation_r and current_atr > 0:
+                            trail_stop = prev_worst + (self.trail_atr_mult * current_atr)
+                            if trail_stop < self.position['stop_loss']:
+                                self.position['stop_loss'] = trail_stop
+                        self.position['min_favorable'] = min(self.position['min_favorable'], row.low)
+                        self.position['prev_min_favorable'] = self.position['min_favorable']
+
+                # ── Check SL / TP hits ───────────────────────────────────
                 if self.position['side'] == 'long':
                     if row.low <= self.position['stop_loss']:
                         exit_price, exit_reason = self.position['stop_loss'], 'Stop Loss'
@@ -85,6 +136,14 @@ class Backtester:
                         exit_price, exit_reason = self.position['stop_loss'], 'Stop Loss'
                     elif row.low <= self.position['take_profit']:
                         exit_price, exit_reason = self.position['take_profit'], 'Take Profit'
+
+                # ── Regime-based exit: close when trend regime ends ───────
+                if not exit_reason and has_regime:
+                    regime_val = row.get('regime', 0) if hasattr(row, 'get') else data.at[timestamp, 'regime']
+                    if self.position['side'] == 'long' and regime_val <= 0:
+                        exit_price, exit_reason = row.close, 'Regime Exit'
+                    elif self.position['side'] == 'short' and regime_val >= 0:
+                        exit_price, exit_reason = row.close, 'Regime Exit'
 
                 if exit_reason:
                     # Apply slippage to exit price

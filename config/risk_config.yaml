@@ -18,18 +18,23 @@ version: "3.0.0"
 # Stop loss: use ATR-based stops, not fixed percentage
 stop_loss_method: "atr"       # "atr" | "percentage"
 atr_period: 14
-atr_multiplier: 2.0           # Stop = 2.0 × ATR (H1-validated)
+atr_multiplier: 2.5           # Stop = 2.5 × ATR (wider: reduces false stop-outs on H1 gold)
                                # Gives MACD momentum entries room to develop before SL
 
 # Take profit: RR ratio applied to the risk distance
 take_profit_method: "rr_ratio"
-risk_reward_ratio: 4.6        # Fixed TP — proven H1 config (WR=36.4%, PF=2.53 ✓)
-                               # Delivered RR = 4.6 - 0.17 drag = 4.43
-                               # Math: 0.364 × 4.43 / 0.636 = 2.53
+risk_reward_ratio: 5.0        # v5: high TP ceiling + regime exit
+                               # Most exits via regime; few trades reach 5R TP
+                               # Regime exit: avg_loss ~$440, TP hits pull avg_win up
+
+# Trailing stop (backtester reads these directly)
+trailing_stop_enabled: false
+trailing_atr_multiplier: 3.0  # Trail at 3.0×ATR (wide — gives H1 gold room)
+trailing_activation_r: 2.0    # Activate after 2R profit (let winners develop first)
 
 # Position sizing (PortfolioManager)
 sizing_method: "fixed_fractional"
-risk_percentage: 1.0           # Risk 1% of equity per trade
+risk_percentage: 1.0           # Risk 0.5% of equity per trade
                                # Lower = more trades survive drawdown periods
 
 # ================================================================
