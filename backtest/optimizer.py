@@ -270,15 +270,22 @@ def walk_forward_backtest(
     train_period: int = 6048,
     test_period: int = 1512,
     score_metric: str = 'sharpe',
+    inner_cv_folds: int = 3,
+    inner_cv_consistency_penalty: float = 1.0,
 ) -> List[Dict]:
     """
-    Convenience function that wires the Backtester and metrics into
-    walk_forward_optimize, handling signal slicing automatically.
+    Convenience function that wires the Backtester and metrics into a
+    walk-forward loop with inner cross-validation for robust param selection.
 
     Each walk-forward fold:
-      1. Trains (grid-searches param_grid) on an in-sample window.
-      2. Tests the best params on the immediately following OOS window.
-      3. Reports efficiency = test_score / train_score for each fold.
+      1. Splits the training window into `inner_cv_folds` sequential sub-periods.
+      2. Scores each param combo as:
+             mean(sub-period scores) − consistency_penalty × std(sub-period scores)
+         This selects params that are consistently good across sub-periods,
+         not just best in one lucky window (the primary overfitting mechanism).
+      3. Re-evaluates best params on the FULL training window → train_score.
+      4. Tests on the immediately following OOS window → test_score.
+      5. Reports efficiency = test_score / train_score.
 
     Args:
         price_data:   Full OHLCV DataFrame with a DatetimeIndex.
@@ -294,6 +301,13 @@ def walk_forward_backtest(
         test_period:  OOS window in bars. Default 1512 = 3 months × 1H bars.
         score_metric: Metric to optimise. One of 'sharpe' | 'calmar' |
                       'profit_factor'. Default 'sharpe'.
+        inner_cv_folds: Number of sequential sub-folds within each training
+                      window for param selection. Default 3. Set to 1 to
+                      revert to the old full-window behaviour.
+        inner_cv_consistency_penalty: Weight applied to std(sub-fold scores)
+                      when computing the adjusted score. Default 1.0 means
+                      one std dev of inconsistency costs a full Sharpe point.
+                      Higher values favour more consistent (lower-variance) params.
 
     Returns:
         List of dicts, one per fold:
@@ -323,49 +337,183 @@ def walk_forward_backtest(
     }
     metric_key = _SCORE_KEY.get(score_metric, 'Sharpe Ratio')
 
-    def _backtest_slice(data_slice: pd.DataFrame, params: Dict) -> float:
-        """Run one backtest fold and return the chosen score metric."""
+    def _backtest_slice(
+        data_slice: pd.DataFrame,
+        params: Dict,
+        warmup_slice: pd.DataFrame = None,
+    ) -> float:
+        """Run one backtest slice and return the chosen score metric.
+
+        Args:
+            data_slice:   The slice to score (train sub-fold or test window).
+            params:       Parameter overrides (atr_multiplier, risk_reward_ratio, …).
+            warmup_slice: Optional prepend data for indicator warm-up.  Signals
+                          are forced NaN here so no trades fire, but indicators
+                          (MA, ADX) build up their history before the actual
+                          slice begins.  This prevents the first N bars of a
+                          test slice from being unfiltered due to NaN indicators.
+        """
         config = {
             **base_config,
             'risk_config': {**base_config.get('risk_config', {}), **params},
         }
         bt = Backtester(config)
-        # Signals are reindexed to the exact date range of this fold's data.
-        signals_slice = signals.reindex(data_slice.index)
-        results = bt.run(data_slice, signals_slice)
 
-        if results['trades'].empty:
-            return 0.0
+        if warmup_slice is not None and not warmup_slice.empty:
+            # Combine warmup + actual slice.  No signals in warmup period.
+            combined_data    = pd.concat([warmup_slice, data_slice])
+            combined_signals = signals.reindex(combined_data.index).copy()
+            combined_signals.loc[warmup_slice.index, 'signal'] = float('nan')
+            raw = bt.run(combined_data, combined_signals)
 
-        metrics = calculate_performance_metrics(
-            results['equity_curve'],
-            results['trades'],
-            results['initial_capital'],
-            run_mc=False,   # skip MC inside each fold — too slow
-        )
+            # Restrict evaluation to the actual data_slice only.
+            test_start = data_slice.index[0]
+            trades_df  = raw['trades']
+            if not trades_df.empty and 'entry_date' in trades_df.columns:
+                trades_df = trades_df[trades_df['entry_date'] >= test_start].copy()
+            eq = raw['equity_curve']
+            eq = eq[eq.index >= test_start]
+
+            if trades_df.empty:
+                return 0.0
+
+            metrics = calculate_performance_metrics(
+                eq, trades_df, raw['initial_capital'], run_mc=False
+            )
+        else:
+            # Signals are reindexed to the exact date range of this slice.
+            signals_slice = signals.reindex(data_slice.index)
+            raw = bt.run(data_slice, signals_slice)
+
+            if raw['trades'].empty:
+                return 0.0
+
+            metrics = calculate_performance_metrics(
+                raw['equity_curve'], raw['trades'],
+                raw['initial_capital'], run_mc=False,
+            )
+
         score = float(metrics.get(metric_key, 0.0))
         # Guard against inf/nan from folds with very few trades
         return score if np.isfinite(score) else 0.0
 
-    optimizer = StrategyOptimizer(
-        {'optimizer_config': {'method': 'grid_search', 'optimization_metric': score_metric}}
-    )
-    raw_results = optimizer.walk_forward_optimize(
-        price_data=price_data,
-        param_grid=param_grid,
-        backtest_func=_backtest_slice,
-        train_period=train_period,
-        test_period=test_period,
-    )
+    def _inner_cv_score(train_slice: pd.DataFrame, params: Dict) -> float:
+        """Score params using sequential K-fold CV within the training window.
 
-    # Attach efficiency ratio to each result for convenience
-    for r in raw_results:
-        r['efficiency'] = (
-            r['test_score'] / r['train_score']
-            if r['train_score'] > 0
-            else float('nan')
+        Splits `train_slice` into `inner_cv_folds` consecutive sub-periods
+        and runs the strategy on each.  Returns:
+            mean(scores) − consistency_penalty × std(scores)
+
+        This penalises params that only work in one sub-period of the training
+        window — the main cause of large train/test Sharpe gaps (overfit).
+        Falls back to the full-window score when sub-periods are too short
+        (< 300 bars) to produce reliable metrics.
+        """
+        n = len(train_slice)
+        min_inner_bars = 300  # need enough trades per sub-period
+        fold_size = n // inner_cv_folds
+
+        if inner_cv_folds <= 1 or fold_size < min_inner_bars:
+            # Sub-periods too small for reliable metrics — full window fallback.
+            return _backtest_slice(train_slice, params)
+
+        sub_scores = []
+        for k in range(inner_cv_folds):
+            start = k * fold_size
+            # Last fold absorbs any remainder so no bars are orphaned.
+            end = start + fold_size if k < inner_cv_folds - 1 else n
+            sub_slice = train_slice.iloc[start:end]
+            if len(sub_slice) < min_inner_bars:
+                continue
+            sub_scores.append(_backtest_slice(sub_slice, params))
+
+        if not sub_scores:
+            return _backtest_slice(train_slice, params)
+
+        arr = np.array(sub_scores, dtype=float)
+        mean_s = float(np.mean(arr))
+        std_s  = float(np.std(arr))
+        # Consistency-adjusted score: penalise high cross-period variance.
+        # A param set that averages Sharpe 1.5 with std 0.1 scores higher
+        # than one averaging 1.8 with std 1.4 (the typical overfit pattern).
+        return mean_s - inner_cv_consistency_penalty * std_s
+
+    # ── Main walk-forward loop ────────────────────────────────────────────────
+    total_bars = len(price_data)
+    current_start = 0
+    results = []
+    param_names  = list(param_grid.keys())
+    param_values = list(param_grid.values())
+    all_combos   = list(product(*param_values))
+
+    while current_start + train_period + test_period <= total_bars:
+        train_end = current_start + train_period
+        test_end  = train_end + test_period
+
+        train_slice = price_data.iloc[current_start:train_end]
+        test_slice  = price_data.iloc[train_end:test_end]
+
+        # ── Step 1: select params via inner CV (robust to sub-period variance) ─
+        best_params = None
+        best_cv_score = float('-inf')
+        for combo in all_combos:
+            params = dict(zip(param_names, combo))
+            cv_score = _inner_cv_score(train_slice, params)
+            if cv_score > best_cv_score:
+                best_cv_score = cv_score
+                best_params = params.copy()
+
+        if best_params is None:
+            current_start += test_period
+            continue
+
+        # ── Step 2: measure train_score on full window (for the table / debug) ─
+        train_score = _backtest_slice(train_slice, best_params)
+
+        # ── Step 3: OOS test (with warm-up from tail of training window) ────
+        # Prepend the last indicator_warmup bars of the training slice so that
+        # indicators (MA trend filter, ADX) are already initialised at the
+        # first bar of the test period.  Without this, the MA is NaN for the
+        # first min_periods bars, leaving those trades unfiltered.
+        indicator_warmup = base_config.get('risk_config', {}).get(
+            'trend_filter_period', 200
         )
-    return raw_results
+        warmup_data = train_slice.iloc[-indicator_warmup:] if indicator_warmup > 0 else None
+        test_score = _backtest_slice(test_slice, best_params, warmup_slice=warmup_data)
+
+        efficiency = (
+            test_score / train_score if train_score > 0 else float('nan')
+        )
+        logger.info(
+            f"Fold {len(results)+1}: "
+            f"Train={train_score:.4f}  Test={test_score:.4f}  "
+            f"Efficiency={efficiency:.2f}  Params={best_params}"
+            + (" ⚠ possible overfit" if np.isfinite(efficiency) and efficiency < 0.4 else "")
+        )
+
+        results.append({
+            'train_start': train_slice.index[0],
+            'train_end':   train_slice.index[-1],
+            'test_start':  test_slice.index[0],
+            'test_end':    test_slice.index[-1],
+            'best_params': best_params,
+            'train_score': train_score,
+            'test_score':  test_score,
+            'efficiency':  efficiency,
+        })
+
+        current_start += test_period
+
+    if results:
+        valid_effs = [r['efficiency'] for r in results if np.isfinite(r['efficiency'])]
+        avg_eff = float(np.mean(valid_effs)) if valid_effs else float('nan')
+        logger.success(
+            f"Walk-forward complete: {len(results)} folds  "
+            f"avg efficiency={avg_eff:.2f}  "
+            f"({'robust' if avg_eff >= 0.6 else 'possible overfit — review params'})"
+        )
+
+    return results
 
 
 # Example usage

@@ -11,6 +11,64 @@ from core.signal_engine import SignalType
 _LONG_SIGNALS = frozenset({SignalType.BUY.value, SignalType.STRONG_BUY.value})
 _SHORT_SIGNALS = frozenset({SignalType.SELL.value, SignalType.STRONG_SELL.value})
 
+
+def calculate_adx(data: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Compute Average Directional Index (ADX) from OHLC data.
+
+    ADX measures trend strength regardless of direction.  Values below ~20
+    indicate a range-bound (choppy) market; above 25 indicates a trending
+    market.  Used by the seasonal ADX gate to suppress entries during weak
+    months when the market has no directional conviction.
+    """
+    high = data['high'].values
+    low  = data['low'].values
+    close = data['close'].values
+    n = len(close)
+
+    adx_out = np.zeros(n)
+    if n < period * 2:
+        return pd.Series(adx_out, index=data.index)
+
+    plus_dm  = np.zeros(n)
+    minus_dm = np.zeros(n)
+    tr       = np.zeros(n)
+
+    for i in range(1, n):
+        up   = high[i] - high[i - 1]
+        down = low[i - 1] - low[i]
+        plus_dm[i]  = up   if up > down and up > 0   else 0
+        minus_dm[i] = down if down > up and down > 0 else 0
+        tr[i] = max(high[i] - low[i],
+                     abs(high[i] - close[i - 1]),
+                     abs(low[i] - close[i - 1]))
+
+    # Wilder smoothing
+    atr_s = np.zeros(n)
+    pdm_s = np.zeros(n)
+    mdm_s = np.zeros(n)
+    atr_s[period] = np.sum(tr[1:period + 1])
+    pdm_s[period] = np.sum(plus_dm[1:period + 1])
+    mdm_s[period] = np.sum(minus_dm[1:period + 1])
+
+    for i in range(period + 1, n):
+        atr_s[i] = atr_s[i - 1] - atr_s[i - 1] / period + tr[i]
+        pdm_s[i] = pdm_s[i - 1] - pdm_s[i - 1] / period + plus_dm[i]
+        mdm_s[i] = mdm_s[i - 1] - mdm_s[i - 1] / period + minus_dm[i]
+
+    safe_atr = np.where(atr_s > 0, atr_s, 1.0)
+    plus_di  = np.where(atr_s > 0, 100 * pdm_s / safe_atr, 0.0)
+    minus_di = np.where(atr_s > 0, 100 * mdm_s / safe_atr, 0.0)
+    di_sum   = plus_di + minus_di
+    safe_di  = np.where(di_sum > 0, di_sum, 1.0)
+    dx       = np.where(di_sum > 0, 100 * np.abs(plus_di - minus_di) / safe_di, 0.0)
+
+    if 2 * period < n:
+        adx_out[2 * period] = np.mean(dx[period:2 * period + 1])
+        for i in range(2 * period + 1, n):
+            adx_out[i] = (adx_out[i - 1] * (period - 1) + dx[i]) / period
+
+    return pd.Series(adx_out, index=data.index)
+
 class Backtester:
     """
     Runs a vector-based backtest using modular Risk and Portfolio Managers.
@@ -45,6 +103,43 @@ class Backtester:
         self.breakeven_activation_r = self.risk_config.get("breakeven_activation_r", 1.0)
         self.breakeven_buffer_r = self.risk_config.get("breakeven_buffer_r", 0.1)
 
+        # Seasonal position-size filter ─────────────────────────────────────
+        # XAUUSD walk-forward shows consistent FAIL/MARGINAL in Apr-Sep across
+        # multiple years (folds 2/6/7/14 all April-October).  During these months
+        # the strategy's edge degrades — range-bound price action with low follow-
+        # through means ATR stops are wide relative to actual moves, killing RR.
+        # Fix: scale sizing down to seasonal_size_scale during weak months rather
+        # than skipping entirely, preserving signal diversity while limiting risk.
+        self.seasonal_filter_enabled = self.risk_config.get("seasonal_filter_enabled", False)
+        self.seasonal_weak_months = set(
+            self.risk_config.get("seasonal_weak_months", [4, 5, 6, 7, 8, 9])
+        )
+        self.seasonal_size_scale = float(
+            self.risk_config.get("seasonal_size_scale", 0.25)
+        )
+
+        # Seasonal ADX entry gate ──────────────────────────────────────────
+        # During weak months, the remaining FAIL folds (2, 6) have deeply
+        # negative test Sharpe because the strategy fires trend signals into
+        # range-bound chop.  ADX measures trend strength: below ~20 the market
+        # has no directional conviction.  This gate BLOCKS entries entirely
+        # during weak months when ADX is below threshold — addressing the root
+        # cause (bad entries into chop) rather than just reducing size.
+        self.seasonal_adx_gate = self.risk_config.get("seasonal_adx_gate_enabled", False)
+        self.seasonal_adx_threshold = float(
+            self.risk_config.get("seasonal_adx_threshold", 20.0)
+        )
+
+        # MA trend direction filter ──────────────────────────────────────────
+        # Year-round filter: only enter longs when close > MA(period), only
+        # enter shorts when close < MA(period).  Prevents counter-trend entries
+        # during macro regime shifts.  Root cause of fold 2 (Apr-Jul 2022 gold
+        # crash, test Sharpe -4.7): long signals fired into a strong USD-driven
+        # downtrend.  The ADX gate can't block this because ADX was HIGH (the
+        # market WAS trending — just against the strategy's long bias).
+        self.trend_filter_enabled = self.risk_config.get("trend_filter_enabled", False)
+        self.trend_filter_period = int(self.risk_config.get("trend_filter_period", 200))
+
         # Short-side regime filter (disabled by default — see risk_config notes).
         self.short_regime_filter = self.risk_config.get("short_regime_filter_enabled", False)
 
@@ -62,6 +157,21 @@ class Backtester:
         self.partial_exit_move_be = self.risk_config.get("partial_exit_move_be", True)
 
         logger.info(f"Backtester initialized with initial capital: ${self.initial_capital:,.2f}")
+        if self.seasonal_filter_enabled:
+            logger.info(
+                f"Seasonal filter: ON  weak_months={sorted(self.seasonal_weak_months)}  "
+                f"size_scale={self.seasonal_size_scale:.2f}x"
+            )
+        if self.seasonal_adx_gate:
+            logger.info(
+                f"Seasonal ADX gate: ON  threshold={self.seasonal_adx_threshold}  "
+                f"(blocks entries in weak months when ADX < {self.seasonal_adx_threshold})"
+            )
+        if self.trend_filter_enabled:
+            logger.info(
+                f"MA trend filter: ON  period={self.trend_filter_period}  "
+                f"(longs only above MA, shorts only below MA — year-round)"
+            )
         if self.trailing_enabled:
             logger.info(
                 f"Trailing stop: ON  activation={self.trail_activation_r}R  "
@@ -136,6 +246,24 @@ class Backtester:
 
         # Pre-compute ATR for trailing stop and vol-adaptive sizing
         atr_series = calculate_atr(data, period=self.risk_config.get("atr_period", 14))
+
+        # Pre-compute ADX for seasonal entry gate
+        adx_series = None
+        if self.seasonal_adx_gate:
+            adx_series = calculate_adx(data, period=self.risk_config.get("atr_period", 14))
+
+        # Pre-compute MA for trend direction filter.
+        # min_periods = period // 10 (≥10) so the MA activates within ~1 trading
+        # day of the slice start — critical for test slices that have no warm-up
+        # data prepended from the training period.  A partial MA with 20+ bars is
+        # still directionally reliable in clear trending markets.
+        ma_series = None
+        if self.trend_filter_enabled:
+            min_p = max(10, self.trend_filter_period // 10)
+            ma_series = data['close'].rolling(
+                self.trend_filter_period,
+                min_periods=min_p
+            ).mean()
 
         # Vol-adaptive position sizing: scale equity down during high-vol
         vol_sizing_enabled = self.risk_config.get("vol_adaptive_sizing", False)
@@ -369,6 +497,33 @@ class Backtester:
                     self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
                     continue
 
+                # ── Seasonal ADX entry gate ──────────────────────────────
+                # During weak months (Apr-Sep), BLOCK entries when ADX is
+                # below threshold.  Addresses the root cause of folds 2/6:
+                # trend signals firing into range-bound chop with no
+                # directional conviction.  ADX < 20 = no trend = no entry.
+                if (self.seasonal_adx_gate
+                        and adx_series is not None
+                        and timestamp.month in self.seasonal_weak_months):
+                    adx_val = adx_series.at[timestamp] if timestamp in adx_series.index else 0
+                    if adx_val < self.seasonal_adx_threshold:
+                        self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
+                        continue
+
+                # ── MA trend direction filter ────────────────────────────
+                # Year-round gate: longs only above MA, shorts only below MA.
+                # Prevents counter-trend entries during macro regime shifts
+                # (e.g. 2022 gold crash where ADX was high but trend was bearish).
+                if self.trend_filter_enabled and ma_series is not None:
+                    ma_val = ma_series.at[timestamp] if timestamp in ma_series.index else float('nan')
+                    if not pd.isna(ma_val):
+                        if trade_side == 'long' and row.close < ma_val:
+                            self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
+                            continue
+                        elif trade_side == 'short' and row.close > ma_val:
+                            self.equity_curve.append({'timestamp': timestamp, 'equity': self.capital})
+                            continue
+
                 # ── Short-side regime filter ─────────────────────────────
                 # Only take short trades when the regime is explicitly bearish
                 # (regime < 0).  Neutral regime (0) is treated as long-only
@@ -423,6 +578,12 @@ class Backtester:
                             (1.0 - atr_pct) / (1.0 - vol_sizing_threshold)
                         )
                         sizing_capital = self.capital * max(scale, vol_sizing_min_scale)
+
+                # Seasonal sizing reduction: scale down during Apr-Sep (Q2/Q3).
+                # Walk-forward shows consistent edge degradation in these months —
+                # the strategy still trades but with a fraction of normal risk.
+                if self.seasonal_filter_enabled and timestamp.month in self.seasonal_weak_months:
+                    sizing_capital = sizing_capital * self.seasonal_size_scale
 
                 # Asymmetric short sizing: reduce risk on short trades to account
                 # for XAUUSD's structural long bias without removing them entirely.

@@ -1,0 +1,645 @@
+================================================================
+  AlgoTradingX1 — SEMI-MANUAL EXECUTION ARCHITECTURE PLAN
+  Generated : 2026-04-06
+  Scope     : Post-forward-test live trading via Telegram signals
+              and manual execution in MetaTrader 5
+================================================================
+
+
+================================================================
+  SECTION 1 — FEASIBILITY & RATIONALE
+================================================================
+
+ANSWER: YES — the plan is fully implementable using the existing
+strategy in run_live_xauusd.py. No strategy changes are required.
+
+WHY IT IS VIABLE
+  The v5 Pullback Strategy in core/signal_engine.py is already
+  completely decoupled from order execution. The signal generation
+  logic (generate_signals_for_backtest) only produces a DataFrame
+  with signal=1, -1, or 0. It has no knowledge of how or whether
+  a trade is placed. This clean separation means:
+
+    Signal generation  →  run as-is, untouched
+    Order execution    →  replace with Telegram alert + manual action
+
+  The only code change is: instead of calling enter_trade(), the
+  script formats a detailed Telegram message and sends it. The
+  trader then places the order manually in MT5.
+
+WHY SEMI-MANUAL BEFORE FULL AUTOMATION
+  Phase sequence rationale:
+
+  Forward test (now)
+    Validates that live edge matches backtest edge before real money
+    is involved. Zero execution risk. Builds trade log history.
+
+  Semi-manual (next phase, real money)
+    Trader maintains full discretion over every entry. Useful during
+    the early real-money phase when confidence in live performance
+    is still being established. Also the right mode for Linux VPS
+    deployment where MT5 Python API is unavailable.
+
+  Full automation (future, after performance validation)
+    Only warranted once live PF >= 1.4 and live/backtest PF >= 0.70
+    have been confirmed over 30+ live trades.
+
+
+================================================================
+  SECTION 2 — THE CRITICAL TIMING CONSTRAINT
+================================================================
+
+The v5 strategy is a BAR-CLOSE strategy. The signal fires at the
+exact close of an H1 candle — that is the moment the pullback to
+EMA20 has been confirmed and price has closed above/below it.
+
+Timeline for each signal:
+
+  14:00:00 UTC — H1 bar closes
+  14:00:03 UTC — Script wakes up (3s buffer after bar close)
+  14:00:04 UTC — Data fetched, signal engine runs
+  14:00:05 UTC — Telegram message delivered to trader
+  14:02~14:05  — Trader sees message, opens MT5, places market order
+  14:05~14:10  — Order filled
+
+This 2–10 minute execution window is acceptable. The EMA20 pullback
+zone is typically 0.5–1.5 × ATR wide (~$5–$17 at current gold
+volatility). A 5-minute delay on a liquid instrument like GOLD
+rarely causes more than $1–$3 of slippage from the intended entry.
+
+SIGNAL VALIDITY WINDOW
+  The signal is only valid while price remains in the EMA20 zone.
+  Once price moves decisively away from EMA20, the pullback setup
+  has resolved and entry no longer has the original edge.
+
+  Maximum entry window : 1–2 bars (1–2 hours after signal)
+  If the trader cannot enter within that window → DO NOT ENTER
+  The script tracks this and sends an expiry notification.
+
+  Rule: if by the NEXT H1 bar close the price has moved more than
+  1.0 × ATR away from EMA20, the signal is marked expired.
+
+
+================================================================
+  SECTION 3 — TWO IMPLEMENTATION MODES
+================================================================
+
+────────────────────────────────────────────────────────────────
+  MODE A — PURE SIGNAL  (recommended starting point)
+────────────────────────────────────────────────────────────────
+
+  Architecture:
+    VPS/PC  →  signal engine  →  Telegram alert
+    Trader  →  reads alert    →  places order manually in MT5
+    Trader  →  manages trade  →  entirely manual (SL/TP/exit)
+
+  What the script does:
+    - Runs the full v5 strategy signal engine every H1 bar close
+    - Sends a detailed, fully-actionable Telegram message on signal
+    - Tracks signal validity; sends expiry alert if not entered
+    - Does NOT track the trade after entry
+    - Does NOT send exit management alerts
+
+  Pros:
+    Simple implementation (minimal new code beyond existing notifier)
+    Zero execution risk from the script side
+    No MT5 dependency (can run on Linux with OANDA data)
+    Trader retains complete control over every decision
+
+  Cons:
+    No exit management support after entry
+    Trader must independently monitor partial exit at 3R,
+    time stop at 30 bars, and regime exit conditions
+    No feedback loop — script has no knowledge of trade status
+
+────────────────────────────────────────────────────────────────
+  MODE B — SIGNAL + CONFIRMATION + EXIT MANAGEMENT
+────────────────────────────────────────────────────────────────
+
+  Architecture:
+    VPS/PC  →  signal engine  →  Telegram alert
+    Trader  →  places order   →  replies /confirm to Telegram bot
+    Script  →  stores state   →  runs manage_open_position() loop
+    Script  →  sends action alerts (partial exit, time stop, etc.)
+    Trader  →  executes actions manually in MT5
+
+  What the script does:
+    Everything in Mode A, plus:
+    - Accepts /confirm <entry_price> reply from trader
+    - Stores position state in live_state.json (same as automated mode)
+    - Runs manage_open_position() identically to run_live_xauusd.py
+    - Sends Telegram ACTION REQUIRED messages instead of placing orders
+
+  Exit action messages sent to trader:
+    - PARTIAL CLOSE: "3R reached. Close 50% at market. Move SL to BE."
+    - TIME STOP:     "30 bars elapsed, still underwater. Close now."
+    - REGIME EXIT:   "Signal reversed to SHORT. Close LONG now."
+    - SL/TP note:    "MT5 will handle SL/TP automatically via the
+                      levels you set at entry."
+
+  Pros:
+    Full exit management discipline maintained
+    Partial exit, time stop, and regime exit all assisted
+    Best risk-adjusted outcome — manual entry, systematic exit
+
+  Cons:
+    Requires two-way Telegram bot (python-telegram-bot library)
+    Trader must remember to send /confirm after every entry
+    State goes stale if trader forgets to confirm
+
+  RECOMMENDATION:
+    Start with Mode A. Switch to Mode B after 10–15 trades once
+    the signal rhythm is familiar and the Telegram flow is tested.
+
+
+================================================================
+  SECTION 4 — SYSTEM ARCHITECTURE DIAGRAM
+================================================================
+
+  ┌──────────────────────────────────────────────────────────┐
+  │  VPS (Linux or Windows)                                  │
+  │                                                          │
+  │  run_signal_xauusd.py  ──runs every H1 bar close──       │
+  │    │                                                     │
+  │    ├─ DataProvider.fetch_bars()                          │
+  │    │    ├─ [Windows] MT5Bridge → MetaTrader5 API         │
+  │    │    └─ [Linux]   OandaProvider → OANDA REST API      │
+  │    │                  symbol: XAU_USD, 3500 H1 bars      │
+  │    │                                                     │
+  │    ├─ AISignalEngine.generate_signals_for_backtest()     │
+  │    │    (core/signal_engine.py — identical to backtest)  │
+  │    │                                                     │
+  │    ├─ SignalValidator.check_validity()                   │
+  │    │    (tracks if signal still in EMA20 zone)           │
+  │    │                                                     │
+  │    ├─ TelegramNotifier.signal_alert()  ─────────────────┼──► Telegram
+  │    │                                                     │
+  │    └─ [Mode B only]                                      │
+  │         TelegramBot.listen()  ◄────────────────────────┼──── /confirm
+  │         manage_open_position()                           │
+  │         TelegramNotifier.action_required()  ────────────┼──► Telegram
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+       Telegram
+         │
+         ▼
+  ┌─────────────┐
+  │  Trader     │
+  │  MT5 on PC  │
+  │  or Win VPS │
+  │             │
+  │  Manual     │
+  │  execution  │
+  └─────────────┘
+
+DATA FLOW SUMMARY
+  OHLCV data (3500 bars)  →  Signal engine  →  Signal (1/-1/0)
+  Signal + account calc   →  Telegram msg   →  Trader action
+  Trader confirmation     →  live_state.json →  Exit management loop
+  Exit condition fired    →  Telegram alert  →  Trader manual close
+
+
+================================================================
+  SECTION 5 — TELEGRAM SIGNAL MESSAGE FORMAT
+================================================================
+
+The message must be fully actionable. The trader should be able to
+open MT5 and place the order from the message alone, with no
+additional calculations required.
+
+────────────────────────────────────────────────────────────────
+  ENTRY SIGNAL MESSAGE
+────────────────────────────────────────────────────────────────
+
+  Example (LONG signal):
+
+  🎯 ENTRY SIGNAL — LONG GOLD
+  ━━━━━━━━━━━━━━━━━━━━━━━━━
+  Bar closed  : 2026-04-05 14:00 UTC
+  Signal      : BUY  (v5 EMA20 Pullback)
+
+  ── Entry ──────────────────────
+  Entry zone  : 3,177.00 – 3,181.50
+    Close was   3,178.25  |  EMA20 = 3,174.80
+    Enter at market NOW or within 1 bar (by 15:00 UTC)
+
+  ── Levels ─────────────────────
+  Stop Loss   : 3,143.75  (–34.50/oz, 3 × ATR)
+  Take Profit : 3,350.75  (+172.50/oz, 5:1 RR)
+  Partial TP  : 3,281.25  (3R — close 50% here)
+
+  ── Sizing ─────────────────────
+  Suggested   : 0.06 lots
+    Risk basis  : 0.5% of $20,000 equity = $100
+    SL dist     : 34.50 pts → $207 per lot → 0.06 lots
+    Adjust if your equity differs from reference above
+
+  ── Filters passed ─────────────
+  EMA200 H1 : BULL  |  D1 EMA50 : BULL
+  ADX       : 22.4  |  DI+>DI-  : YES
+  MAMA      : BULL  |  ITrend   : BULL
+  EBSW      : +0.3  |  Session  : London
+
+  ⚠️  Signal valid until ~15:05 UTC (1 bar).
+      Do not enter if price leaves zone 3,143–3,196.
+
+  [Mode B only]
+  After filling, reply:  /confirm 3178.50
+  (Replace with your actual fill price)
+
+────────────────────────────────────────────────────────────────
+  SIGNAL EXPIRED MESSAGE
+────────────────────────────────────────────────────────────────
+
+  ⛔ SIGNAL EXPIRED — Do not enter
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Signal from  : 14:00 UTC LONG
+  Reason       : Price left EMA20 zone after 1 bar
+  Current price: 3,201.40  (moved +23pts from zone)
+  Action       : Wait for next signal. Do not chase.
+
+────────────────────────────────────────────────────────────────
+  EXIT ACTION MESSAGES (Mode B only)
+────────────────────────────────────────────────────────────────
+
+  Partial close at 3R:
+
+  📤 ACTION — PARTIAL CLOSE NOW
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Reason      : 3R reached (+3.04R)
+  Action 1    : Close 50% of position at market
+                = 0.03 lots (half of your 0.06)
+  Action 2    : Move Stop Loss to breakeven → 3,178.50
+  Current     : 3,284.30
+  Entry was   : 3,178.50
+  Bars open   : 14
+
+  Time stop at 30 bars:
+
+  ⏱ ACTION — TIME STOP, CLOSE NOW
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Reason      : 30 bars elapsed, still underwater (–0.7R)
+  Action      : Close ALL remaining position at market
+  Current     : 3,154.30
+  Entry was   : 3,178.50
+  Bars open   : 30
+
+  Regime exit (signal reversed):
+
+  🔄 ACTION — REGIME EXIT, CLOSE NOW
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Reason      : Signal reversed to SHORT
+  Action      : Close ALL remaining LONG position at market
+  Current     : 3,225.80  (+2.5R)
+  Entry was   : 3,178.50
+  Bars open   : 18
+  Note        : A new SHORT signal alert will follow if confirmed.
+
+  No-action status (hourly heartbeat, Mode B only):
+
+  📊 POSITION UPDATE — 2026-04-05 17:00 UTC
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Side        : LONG  0.06 lots
+  Entry       : 3,178.50
+  Current     : 3,221.40  (+1.25R)
+  SL          : 3,143.75  |  TP: 3,350.75
+  Partial     : Not yet (triggers at 3,281.25)
+  Bars open   : 3 of 30 max
+
+
+================================================================
+  SECTION 6 — FILE STRUCTURE
+================================================================
+
+Current project has run_live_xauusd.py for full automation.
+Semi-manual requires a separate script to avoid any risk of
+accidentally executing live orders.
+
+BEFORE (current)
+  run_live_xauusd.py      Full automation (forward test, paper)
+
+AFTER (semi-manual added)
+  run_live_xauusd.py      Full automation — unchanged
+  run_signal_xauusd.py    NEW: signal-only / semi-manual script
+  live_state.json         Shared state file (both scripts use it)
+  config/signal_config.yaml  NEW: semi-manual specific settings
+
+The two scripts share:
+  core/signal_engine.py         Signal generation (untouched)
+  modules/ehlers/*.py           Indicator modules (untouched)
+  TelegramNotifier class        Notification delivery
+  live_state.json               Position state persistence
+
+They differ in:
+  run_live_xauusd.py:   MT5Bridge  →  enter_trade()  →  mt5.order_send()
+  run_signal_xauusd.py: DataProvider → signal_alert()  →  Telegram only
+
+config/signal_config.yaml (new, proposed content):
+  data_provider : oanda         # oanda | mt5
+  mode          : signal_only   # signal_only (A) | assisted (B)
+  risk_pct      : 0.5           # used only for lot size suggestion
+  ref_equity    : 20000         # reference equity for sizing message
+  oanda_env     : practice      # practice | live
+
+
+================================================================
+  SECTION 7 — DATA PROVIDER ABSTRACTION
+================================================================
+
+run_signal_xauusd.py uses a swappable DataProvider so the same
+script runs on both Windows (MT5) and Linux (OANDA).
+
+CLASS: DataProvider  (abstract interface)
+  Method: fetch_bars(count: int) -> pd.DataFrame
+  Returns: OHLCV DataFrame, UTC-indexed, ascending, last bar = most
+           recently CLOSED H1 bar
+
+  Implementation A — MT5DataProvider  (Windows only)
+    Wraps MT5Bridge.fetch_bars() from run_live_xauusd.py
+    Symbol: GOLD (MT5 market watch name)
+    Source: mt5.copy_rates_from_pos(GOLD, H1, start_pos=1, 3500)
+    Note  : Same authoritative price feed as execution; ideal when
+            running on same Windows machine as MT5 terminal
+
+  Implementation B — OandaDataProvider  (Linux or Windows)
+    Builds on existing interface/oanda_connector.py skeleton
+    Endpoint : GET /v3/instruments/XAU_USD/candles
+    Params   : granularity=H1, count=3500, price=M (midpoint)
+    Filter   : complete=true (skip currently-forming candle)
+    Env vars : OANDA_API_TOKEN, OANDA_ACCOUNT_ID (add to .env)
+    Note     : Spot gold price — closest public substitute for
+               broker GOLD CFD. No roll gaps, 5yr+ history.
+
+EXISTING INFRASTRUCTURE
+  interface/oanda_connector.py  —  OandaConnector class skeleton
+    Already has: __init__, base_url, headers, get_account_summary
+    Needs adding: get_candles(instrument, granularity, count) method
+    This is a thin REST wrapper, ~30 lines to complete.
+
+SELECTION LOGIC (in run_signal_xauusd.py)
+  provider_name = config.get('data_provider', 'mt5')
+  if provider_name == 'oanda':
+      provider = OandaDataProvider(token, account_id, env)
+  else:
+      provider = MT5DataProvider()
+  data = provider.fetch_bars(LOOKBACK_BARS)
+
+
+================================================================
+  SECTION 8 — SIGNAL VALIDITY TRACKING LOGIC
+================================================================
+
+The script maintains a pending_signal state between bar cycles.
+This is stored in live_state.json under the 'pending_signal' key.
+
+STATE STRUCTURE (pending_signal)
+  {
+    "direction"     : "long",          # or "short"
+    "signal_bar"    : "2026-04-05 14:00",
+    "entry_zone_low": 3177.00,
+    "entry_zone_hi" : 3181.50,
+    "ema20"         : 3174.80,
+    "atr"           : 11.50,
+    "sl"            : 3143.75,
+    "tp"            : 3350.75,
+    "partial_tp"    : 3281.25,
+    "suggested_lots": 0.06,
+    "expires_bar"   : "2026-04-05 15:00",
+    "bars_elapsed"  : 0
+  }
+
+VALIDITY CHECK (run every H1 bar close)
+  close = data['close'].iloc[-1]
+  ema20 = data['close'].ewm(span=20).mean().iloc[-1]
+  atr   = calculate_atr(data).iloc[-1]
+
+  zone_low = ema20 - 1.0 * atr
+  zone_hi  = ema20 + 1.5 * atr
+
+  still_valid = (zone_low <= close <= zone_hi)
+             and (pending['bars_elapsed'] < 2)
+
+  if not still_valid:
+      send SIGNAL EXPIRED message
+      clear pending_signal from state
+
+  else:
+      pending['bars_elapsed'] += 1
+      (no message — signal still live)
+
+CONFLICT RESOLUTION
+  If a new opposite signal fires while a pending signal exists:
+    - Cancel the pending signal (send expired message)
+    - Send the new signal alert
+  If the same direction signal fires again within 5 bars:
+    - Suppress (5-bar cooldown from signal_engine already handles this)
+
+
+================================================================
+  SECTION 9 — MODE B: CONFIRMATION FLOW
+================================================================
+
+Requires: python-telegram-bot library (pip install python-telegram-bot)
+
+TRADER WORKFLOW (Mode B)
+  1. Receive ENTRY SIGNAL message on Telegram
+  2. Open MT5, place market order at current price
+  3. Set SL and TP as shown in the message
+  4. Reply to bot: /confirm 3178.50
+     (actual fill price, not the zone mid)
+  5. Receive confirmation: "Position tracked. I will alert you
+     at 3R, time stop, and on regime change."
+  6. Receive ACTION REQUIRED messages as conditions are met
+  7. Execute each action manually in MT5 when alerted
+
+/CONFIRM COMMAND HANDLER
+  Parses fill price from message text
+  Creates position state in live_state.json:
+    {
+      "ticket"      : null,         # no MT5 ticket in manual mode
+      "side"        : "long",
+      "entry_price" : 3178.50,      # trader's actual fill
+      "initial_risk": 34.75,        # entry - sl
+      "sl"          : 3143.75,
+      "tp"          : 3350.75,
+      "lots"        : 0.06,
+      "partial_done": false,
+      "bars_open"   : 0,
+      "mode"        : "manual"      # key distinguisher
+    }
+
+  Once confirmed, manage_open_position() runs every bar close
+  identically to the automated mode — but instead of placing MT5
+  orders it sends ACTION REQUIRED Telegram messages.
+
+/CONFIRM WITH LOT OVERRIDE
+  If trader entered a different size than suggested:
+    /confirm 3178.50 0.08
+  Script updates lots in state; partial close calculation adjusts.
+
+CANCELLATION
+  /cancel  →  clears pending_signal and position state
+  Used if trader decides not to enter after receiving the alert,
+  or if a live trade was closed manually before the bot tracked it.
+
+MODE B LIMITATIONS
+  - Script cannot verify the trade was actually placed in MT5.
+    If trader sends /confirm but did not enter, exit alerts are
+    misleading. Requires discipline from the trader.
+  - Script cannot read MT5 account equity in manual mode.
+    Heartbeat update shows calculated P&L, not MT5 actual P&L.
+  - SL/TP are assumed to be set as instructed. If trader sets
+    different levels, exit calculations will be incorrect.
+
+
+================================================================
+  SECTION 10 — ROLLOUT PHASES
+================================================================
+
+PHASE 1 — CURRENT: Automated Forward Test
+  Script  : run_live_xauusd.py
+  Mode    : Full automation (paper, 0.5% risk)
+  Purpose : Validate live edge vs backtest (target: PF >= 1.4)
+  Platform: Windows + MT5 running
+  Duration: Until 30+ trades, PF validated
+  Data    : MT5 (GOLD, H1, 3500 bars)
+
+PHASE 2 — NEXT: Semi-Manual Mode A (real money, small size)
+  Script  : run_signal_xauusd.py  (to be created)
+  Mode    : Pure signal alerts, manual MT5 execution
+  Purpose : First real-money exposure with full trader control
+  Platform: Linux VPS (OANDA data) or Windows (MT5 data)
+  Risk    : Same 0.5% per trade initially
+  Duration: 20–30 trades to establish rhythm and confidence
+  Data    : OANDA XAU_USD or MT5 GOLD
+
+  Scale-up gate (same as automated):
+    30+ live trades with PF >= 1.4
+    Live/backtest PF ratio >= 0.70
+    Max drawdown not approaching 15%
+
+PHASE 3 — OPTIONAL: Semi-Manual Mode B (assisted exits)
+  Script  : run_signal_xauusd.py  (Mode B activated in config)
+  Mode    : Signal + /confirm + exit management alerts
+  Purpose : Add systematic exit discipline while keeping manual entry
+  Platform: Linux VPS (preferred) or Windows
+  Requires: python-telegram-bot, /confirm reply flow working
+
+PHASE 4 — FUTURE: Full Automation (Linux, MetaApi bridge)
+  Script  : run_signal_xauusd.py  (execution re-enabled via MetaApi)
+  Mode    : Fully automated from Linux
+  Bridge  : MetaApi cloud → Windows MT5 terminal (or broker server)
+  Purpose : Remove execution latency, run 24/5 unattended
+  Requires: MetaApi account, MetaApi Python SDK
+
+
+================================================================
+  SECTION 11 — EXISTING PROJECT INFRASTRUCTURE
+================================================================
+
+The following files already exist in the project and are directly
+usable or require minor completion for the semi-manual build:
+
+  interface/oanda_connector.py
+    Status : Skeleton exists (OandaConnector class, REST headers)
+    Needs  : get_candles() method (~30 lines to add)
+    Used by: OandaDataProvider in run_signal_xauusd.py
+
+  connectors/mt4_zmq_bridge.py
+    Status : Full ZMQ bridge implementation exists
+    Relevance: Shows existing ZMQ pattern; MT5 equivalent would
+               be a ZMQ EA in MT5 sending data to Linux Python.
+               Alternative to MetaApi for Phase 4 if self-hosted
+               execution bridge is preferred.
+
+  core/signal_engine.py
+    Status : Complete, production-ready, validated
+    Used by: run_signal_xauusd.py with zero changes required
+
+  run_live_xauusd.py
+    Status : Running (forward test active)
+    Reuse  : MT5Bridge, TelegramNotifier, lots_from_risk(),
+             calculate_atr(), seconds_to_next_h1_close(),
+             manage_open_position() — all copy directly into
+             run_signal_xauusd.py with execution calls replaced
+             by Telegram ACTION messages.
+
+  .env
+    Add    : OANDA_API_TOKEN, OANDA_ACCOUNT_ID
+    Keep   : TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (already set)
+
+
+================================================================
+  SECTION 12 — BUILD CHECKLIST
+================================================================
+
+  Mode A (Pure Signal):
+
+  [ ] Complete interface/oanda_connector.py get_candles() method
+  [ ] Create OandaDataProvider class with fetch_bars() interface
+  [ ] Create run_signal_xauusd.py
+        - Copy MT5Bridge, TelegramNotifier, helper functions
+        - Replace enter_trade() with signal_alert() call
+        - Add pending_signal state and validity check loop
+        - Add SIGNAL EXPIRED message on zone exit
+        - Add startup notification with account/config summary
+  [ ] Add signal_config.yaml with data_provider, mode, risk_pct
+  [ ] Add OANDA_API_TOKEN, OANDA_ACCOUNT_ID to .env
+  [ ] Test signal generation on historical data
+  [ ] Test Telegram delivery end-to-end
+  [ ] Deploy to VPS, verify first signal fires correctly
+
+  Mode B (Assisted Exits) — after Mode A is stable:
+
+  [ ] pip install python-telegram-bot
+  [ ] Add TelegramBot listener class with /confirm and /cancel
+  [ ] Wire manage_open_position() to send ACTION messages
+      instead of calling mt5.close_position()
+  [ ] Add hourly heartbeat message for open positions
+  [ ] Test /confirm flow with a paper trade
+  [ ] Test ACTION REQUIRED messages for each exit condition
+
+
+================================================================
+  SECTION 13 — KEY DESIGN PRINCIPLES
+================================================================
+
+1. STRATEGY IS NEVER MODIFIED
+   Signal generation in core/signal_engine.py runs identically
+   whether the mode is automated, semi-manual, or signal-only.
+   The edge must not be altered between phases.
+
+2. SEPARATE SCRIPTS FOR SEPARATE MODES
+   run_live_xauusd.py and run_signal_xauusd.py are never merged.
+   Accidental automated execution of real-money orders is the
+   most serious operational risk. Keeping them as distinct files
+   with distinct purposes eliminates this risk entirely.
+
+3. SIGNAL MESSAGES ELIMINATE ALL MANUAL CALCULATION
+   Every signal message contains the complete, ready-to-use
+   trade parameters: zone, SL, TP, partial TP, and lot size.
+   Trader opens MT5 and places the order from the message alone.
+   No looking up ATR, no calculating SL distance, no sizing math.
+
+4. SIGNAL VALIDITY IS TRACKED AND COMMUNICATED
+   The script actively monitors whether the signal is still valid
+   on subsequent bars. An expired signal gets an explicit message:
+   "Do not enter." This prevents stale-signal entries that carry
+   none of the original statistical edge.
+
+5. DATA SOURCE MUST MATCH EXECUTION INSTRUMENT
+   On Windows with MT5: use MT5 data (GOLD H1, same feed as fills)
+   On Linux VPS: use OANDA XAU_USD (spot gold, no roll gaps)
+   Never use yfinance GC=F — futures roll gaps corrupt EMA200 and
+   D1 EMA50 regime filters for weeks after each roll event.
+
+6. LIVE_STATE.JSON IS THE SINGLE SOURCE OF TRUTH
+   Both scripts read and write the same state file. If the trader
+   switches between automated and semi-manual mode mid-trade, the
+   position context is preserved. The 'mode' field in the position
+   state ('auto' vs 'manual') determines exit behavior.
+
+================================================================
+  END OF DOCUMENT
+================================================================

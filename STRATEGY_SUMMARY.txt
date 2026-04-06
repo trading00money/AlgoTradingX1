@@ -1,0 +1,276 @@
+================================================================
+  AlgoTradingX1 — STRATEGY & RISK MANAGEMENT SUMMARY
+  Generated : 2026-04-06 15:30 UTC
+  Project   : d:\Trading Forex\AlgoTrading\AlgoTradingX1\
+================================================================
+
+
+================================================================
+  SECTION 1 — LIVE EXECUTION CHAIN
+================================================================
+
+PRIMARY ENTRY POINT
+  File : run_live_xauusd.py
+  Run  : python run_live_xauusd.py
+  Mode : Fully automated paper trading (forward test)
+  Phase: Paper (0.5% risk). Scale to 1.0% after 30+ trades,
+         live PF >= 1.4, live/backtest PF ratio >= 0.70.
+
+EXECUTION CHAIN (call order at each H1 bar close)
+  1. run_live_xauusd.py
+         LiveTrader.run()
+         └─ waits for UTC hour boundary + 3s buffer
+         └─ LiveTrader.fetch_data()
+               └─ MT5Bridge.fetch_bars()
+                     └─ mt5.copy_rates_from_pos(GOLD, H1, start_pos=1, 3500)
+         └─ LiveTrader.get_signals()
+               └─ core/signal_engine.py
+                     AISignalEngine.generate_signals_for_backtest()
+                     └─ modules/ehlers/mama.py            (MAMA / FAMA)
+                     └─ modules/ehlers/instantaneous_trendline.py  (ITrend)
+                     └─ modules/ehlers/sinewave_indicator.py       (EBSW)
+         └─ LiveTrader.manage_open_position()   (exits if open)
+         └─ LiveTrader.enter_trade()            (entries if flat)
+         └─ TelegramNotifier.send()             (all events)
+
+STATE PERSISTENCE
+  File : live_state.json
+  Contains: open position ticket, side, entry price, initial risk,
+            bars_open counter, partial_done flag, trade_log history.
+  Survives script restarts without losing position context.
+
+SUPPORTING SCRIPTS
+  run.py backtest          — 5-year XAUUSD H1 backtest (same strategy)
+  run_walkforward.py       — Walk-forward optimization / validation
+  run_live_xauusd.py       — Live execution (this script)
+
+CONFIGURATION FILES READ AT RUNTIME
+  config/strategy_config.yaml   — high_vol_adx_filter flag (off by default)
+  config/risk_config.yaml       — ATR mult, RR, partial exit, time stop
+  .env                          — MT5_LOGIN, MT5_PASSWORD,
+                                  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+
+================================================================
+  SECTION 2 — ACTIVE STRATEGY: v5 EMA20 PULLBACK
+================================================================
+
+NAME      : Pullback Entry Strategy v5
+INSTRUMENT: XAUUSD (MT5 symbol: GOLD)
+TIMEFRAME : H1 (hourly bars, signal on bar close)
+FILE      : core/signal_engine.py
+            method: AISignalEngine.generate_signals_for_backtest()
+            lines : 777 – 971
+
+CONCEPT
+  Enters on pullbacks to EMA20 within confirmed trending regimes.
+  Unlike crossover strategies (v1–v4), entries occur AT support/
+  resistance rather than after it breaks, giving tighter risk and
+  better statistical entry prices.
+
+--- ENTRY CONDITIONS (LONG) ---
+
+  Pullback trigger (price action):
+    - Bar low touches EMA20 zone:
+        low <= EMA20 + 0.5 × ATR  AND  low >= EMA20 – 1.0 × ATR
+    - Close above EMA20 (support held, bullish rejection)
+
+  Ehlers state confirmation (all three required):
+    - MAMA > FAMA                 (MESA adaptive trend bullish)
+    - ITrend > ITrend_trigger     (DSP trendline bullish)
+    - EBSW > –0.5                 (not in cycle downturn)
+
+  Regime gate (all required):
+    - H1 EMA200 bull:  close > EMA200  AND  EMA200_slope(20) > 0
+    - D1 EMA50  bull:  daily close > D1 EMA50
+    - ADX > 15                    (minimum trend strength)
+    - DI+ > DI– + 1               (directional buffer)
+    - Session: 07:00–20:00 UTC    (London + New York only)
+
+--- ENTRY CONDITIONS (SHORT) ---
+  Mirror of long conditions with bear equivalents:
+    - High touches EMA20 zone from below
+    - Close below EMA20 (resistance held)
+    - MAMA < FAMA, ITrend < trigger, EBSW < +0.5
+    - H1 EMA200 bear, D1 EMA50 bear, ADX > 15, DI– > DI+ + 1
+    - Session: 07:00–20:00 UTC
+
+--- COOLDOWN ---
+  5-bar global cooldown between consecutive signals.
+  Prevents back-to-back entries in choppy zones.
+
+--- EXIT LOGIC ---
+  Four independent exit mechanisms (managed by LiveTrader
+  in manage_open_position(), checked every H1 bar close):
+
+  1. Take Profit (MT5 managed)
+     Full TP order at entry ± 5.0 × ATR × 3.0 = 15.0 × ATR
+     This is a ceiling; regime exit captures the 3–4R sweet spot.
+
+  2. Stop Loss (MT5 managed)
+     Hard stop at entry ± 3.0 × ATR(14).
+
+  3. Partial Exit at 3R  (script managed)
+     When unrealized P&L >= 3 × initial risk distance:
+       - Close 50% of position at market
+       - Move SL to entry price (breakeven)
+     Converts stalled winners to locked-in gains.
+
+  4. Time Stop at 30 bars  (script managed)
+     If still underwater (unrealized R < 0) after 30 H1 bars:
+       - Close 100% of position at market.
+     Cuts slow bleeders before the full SL is hit.
+
+  5. Regime Exit  (script managed)
+     If signal flips direction while in a trade:
+       - Long position + SELL signal  → close immediately
+       - Short position + BUY signal  → close immediately
+     Uses fast Ehlers exit regime (majority-vote: 2 of 3 Ehlers
+     indicators flip) which responds 5–15 bars earlier than the
+     slow EMA200+ADX regime gate.
+
+--- INDICATOR WARMUP REQUIREMENTS ---
+  Indicator       Warmup needed   Status at 3500 bars
+  ─────────────── ─────────────── ──────────────────────
+  ATR(14)         63 H1 bars      OK
+  EMA20           46 H1 bars      OK
+  EMA200          461 H1 bars     OK  (7.6× margin)
+  ADX / DI±       63 H1 bars      OK
+  ITrend (0.07)   64 H1 bars      OK
+  EBSW (40/10)    50 H1 bars      OK
+  MAMA            180 H1 bars     OK
+  D1 EMA50        2,760 H1 bars   OK  (3500 → ~146 daily bars)
+
+  LOOKBACK_BARS = 3500  (set in run_live_xauusd.py)
+  Minimum safe  = 2760  (enforced by data quality check in run())
+
+--- BACKTEST RESULTS (5-year XAUUSD H1, 2021–2026) ---
+  Total return       :  206%
+  Profit Factor      :  1.944
+  Sharpe Ratio       :  2.301
+  Sortino Ratio      :  3.18   (estimated)
+  Max Drawdown       :  8.49%
+  Calmar Ratio       :  2.628
+  Walk-Forward param :  ATR×3.0 SL selected in 7 of 16 folds
+
+
+================================================================
+  SECTION 3 — RISK MANAGEMENT (LIVE RUNTIME PARAMETERS)
+================================================================
+
+Source file: config/risk_config.yaml (flat keys section)
+These are the parameters ACTUALLY READ by the live script and
+backtester. The nested YAML sections are documentation only.
+
+--- POSITION SIZING ---
+  Method         : Fixed fractional
+  Risk per trade : 0.5% equity  (paper phase, live script constant)
+                   1.0% equity  (backtested value; post-scale-up target)
+  Short scale    : 0.5×  (short trades use half normal size)
+                   Rationale: shorts carry higher tail risk on gold;
+                   asymmetric sizing preserves their diversification
+                   benefit while limiting drag on equity curve.
+  Lot formula    : lots = (equity × risk%) / (SL_distance × 100)
+                   where 100 = oz per standard lot on MT5 GOLD
+
+--- STOP LOSS ---
+  Method         : ATR-based
+  ATR period     : 14
+  Multiplier     : 3.0 × ATR  (walk-forward selected, 7/16 folds)
+  Direction      : long  SL = entry – (3.0 × ATR)
+                   short SL = entry + (3.0 × ATR)
+
+  Vol-adaptive SL (enabled):
+    Above 70th ATR percentile → scale multiplier down linearly
+    Floor multiplier           : 1.5×  (extreme volatility)
+    Hard SL cap                : $100/oz maximum distance
+    Rationale: prevents outsized dollar losses during gold volatility
+    spikes (2021–2022 rate hike period).
+
+  Trailing stop  : DISABLED
+    Tested on 5yr MT5 data; hurt PF at all settings tested.
+
+  Breakeven stop : DISABLED
+    Tested: cuts avg_win more than avg_loss (PF 1.90 → 1.83).
+    Replaced by partial exit at 3R + move SL to BE.
+
+--- TAKE PROFIT ---
+  Method         : RR ratio
+  RR ratio       : 5.0  (TP = entry ± 5.0 × risk distance)
+  This is a ceiling only. The regime exit mechanism captures
+  the 3–4R sweet spot in practice. Lowering RR to 3.0 was tested
+  and reduced PF from 1.96 to 1.68 because regime exits lost value
+  without the 5R ceiling to anchor the best winners.
+
+--- PARTIAL EXIT ---
+  Enabled        : Yes
+  Trigger        : 3.0R unrealized profit
+  Close amount   : 50% of remaining position
+  After trigger  : SL moved to entry price (breakeven)
+  Rationale      : At 3R (60% of the way to 5R TP), trade has
+                   enough confirmation to lock gains. 2R was too
+                   early and cannibalized best winners.
+
+--- TIME STOP ---
+  Enabled        : Yes
+  Bars threshold : 30 H1 bars (~1.25 trading days)
+  Condition      : Close if still underwater (unrealized R < 0)
+  Rationale      : Converts full SL losses into smaller time stop
+                   losses on stagnating trades.
+
+--- SCALE-UP CHECKLIST (before setting PAPER_RISK_PCT = 1.0) ---
+  [ ] 30+ executed trades logged in live_state.json
+  [ ] Live Profit Factor >= 1.4
+  [ ] Live/Backtest PF ratio >= 0.70  (e.g., 1.5 / 1.944 = 0.77)
+  [ ] Max drawdown not approaching 15% of account
+
+--- CIRCUIT BREAKERS (config/risk_config.yaml reference section) ---
+  These are documented targets, not yet wired to run_live_xauusd.py:
+  Daily loss limit           : –5% equity → stop trading
+  Consecutive loss limit     : 5 trades → pause 24h
+  Monthly max drawdown       : –20% equity
+  Win rate floor             : 35% over last 20 trades
+  Min acceptable PF          : 1.5 over last 30 trades
+
+
+================================================================
+  SECTION 4 — NOTIFICATIONS (TELEGRAM)
+================================================================
+
+Credentials : .env  →  TELEGRAM_BOT_TOKEN, TELEGRAM_ALERTS_CHAT_ID
+Class       : TelegramNotifier  (run_live_xauusd.py)
+
+Events notified:
+  startup        — Script started; account, balance, strategy params
+  trade_opened   — Entry price, SL, TP, lots, ATR, $ risk, ticket
+  partial_exit   — Lots closed, price, remaining, BE SL, R at trigger
+  time_stop      — Position closed, bars elapsed, R at exit
+  regime_exit    — Signal reversed, direction of new signal, R at exit
+  sl_tp_hit      — Position closed by MT5 (SL or TP hit), all details
+
+
+================================================================
+  SECTION 5 — DEPLOYMENT NOTES
+================================================================
+
+CURRENT DEPLOYMENT
+  Platform       : Windows (required for MetaTrader5 Python package)
+  MT5 terminal   : Must be running and logged in before script start
+  MT5 symbol     : GOLD  (confirm in Market Watch)
+  Magic number   : 20260101  (identifies script's own orders)
+  Data source    : MT5 (copy_rates_from_pos, start_pos=1)
+
+FUTURE LINUX VPS DEPLOYMENT (semi-manual mode)
+  Data source    : OANDA REST API (XAU_USD spot, no roll gaps)
+                   Library: oandapyV20  (pip install oandapyV20)
+                   Env vars: OANDA_API_TOKEN, OANDA_ACCOUNT_ID
+  Execution      : Manual (Telegram signals → MT5 on Windows device)
+  Alternative    : MetaApi cloud bridge for full automation from Linux
+
+DO NOT USE yfinance for XAUUSD live signals:
+  Maps to GC=F (futures, not spot). Roll events every ~2 months
+  corrupt EMA200 and D1 EMA50 for weeks. Use OANDA XAU_USD instead.
+
+================================================================
+  END OF SUMMARY
+================================================================

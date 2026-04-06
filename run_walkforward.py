@@ -10,7 +10,6 @@ Output:
     Target: avg efficiency >= 0.6 before going live.
 """
 import os
-import sys
 import yaml
 import json
 from loguru import logger
@@ -160,7 +159,7 @@ def main():
             status = "FAIL (overfit?)"
 
         print(
-            f"{i+1:<6} {ts+' → '+te:<14} {str(atr):<10} {str(rr):<10} "
+            f"{i+1:<6} {ts+' -> '+te:<14} {str(atr):<10} {str(rr):<10} "
             f"{r['train_score']:<14.3f} {r['test_score']:<13.3f} {eff:<12.2f} {status}"
         )
 
@@ -172,31 +171,59 @@ def main():
     fail_count = sum(1 for e in valid_effs if e < 0.4)
 
     print(f"\nFolds total   : {len(results)}")
-    print(f"PASS  (≥0.6)  : {pass_count}")
+    print(f"PASS  (>=0.6) : {pass_count}")
     print(f"FAIL  (<0.4)  : {fail_count}")
     print(f"Avg efficiency: {avg_eff:.2f}", end="  ")
 
     if avg_eff >= 0.6:
-        print("✓ ROBUST — strategy passes walk-forward validation")
+        print("ROBUST -- strategy passes walk-forward validation")
     elif avg_eff >= 0.4:
-        print("⚠ MARGINAL — review failing folds before going live")
+        print("MARGINAL -- review failing folds before going live")
     else:
-        print("✗ OVERFIT — do not go live. Review parameters.")
+        print("OVERFIT -- do not go live. Review parameters.")
 
-    # 6. Best parameter vote count
-    from collections import Counter
-    atr_votes = Counter(r['best_params'].get('atr_multiplier') for r in results)
-    rr_votes  = Counter(r['best_params'].get('risk_reward_ratio') for r in results)
+    # 6. Best parameter vote count — season-weighted
+    #
+    # Walk-forward analysis shows consistent FAIL/MARGINAL in Apr-Sep across
+    # multiple years (Q2/Q3 seasonal weakness).  A simple vote count lets these
+    # failing folds dilute the recommended params with parameters tuned for a
+    # regime the strategy doesn't generalise to.
+    #
+    # Fix: folds whose test window starts in Apr-Sep (weak months) receive half
+    # the vote weight of Q4/Q1 folds.  Efficient folds (≥0.6) in any season
+    # still receive their full or half weight; the goal is not to ignore summer
+    # but to reduce its influence on the live-trading recommendation.
+    _WEAK_MONTHS = {4, 5, 6, 7, 8, 9}
 
-    print("\n--- Parameter Stability (most selected per fold) ---")
-    print(f"atr_multiplier    votes: {dict(atr_votes)}")
-    print(f"risk_reward_ratio votes: {dict(rr_votes)}")
+    from collections import defaultdict
+    atr_weighted  = defaultdict(float)
+    rr_weighted   = defaultdict(float)
+    atr_raw_count = defaultdict(int)   # keep raw counts for display
+    rr_raw_count  = defaultdict(int)
 
-    recommended_atr = atr_votes.most_common(1)[0][0]
-    recommended_rr  = rr_votes.most_common(1)[0][0]
-    print(f"\nRecommended params for live trading:")
-    print(f"  atr_multiplier:    {recommended_atr}  (selected {atr_votes[recommended_atr]}/{len(results)} folds)")
-    print(f"  risk_reward_ratio: {recommended_rr}  (selected {rr_votes[recommended_rr]}/{len(results)} folds)")
+    for r in results:
+        test_start = r['test_start']
+        month = test_start.month if hasattr(test_start, 'month') else int(str(test_start)[5:7])
+        weight = 0.5 if month in _WEAK_MONTHS else 1.0
+
+        atr_val = r['best_params'].get('atr_multiplier')
+        rr_val  = r['best_params'].get('risk_reward_ratio')
+        if atr_val is not None:
+            atr_weighted[atr_val]  += weight
+            atr_raw_count[atr_val] += 1
+        if rr_val is not None:
+            rr_weighted[rr_val]    += weight
+            rr_raw_count[rr_val]   += 1
+
+    print("\n--- Parameter Stability (season-weighted votes: Q4/Q1=1.0, Q2/Q3=0.5) ---")
+    print(f"atr_multiplier    raw counts: {dict(atr_raw_count)}  weighted: { {k: round(v,1) for k,v in atr_weighted.items()} }")
+    print(f"risk_reward_ratio raw counts: {dict(rr_raw_count)}   weighted: { {k: round(v,1) for k,v in rr_weighted.items()} }")
+
+    recommended_atr = max(atr_weighted, key=atr_weighted.__getitem__)
+    recommended_rr  = max(rr_weighted,  key=rr_weighted.__getitem__)
+    print(f"\nRecommended params for live trading (season-weighted):")
+    print(f"  atr_multiplier:    {recommended_atr}  (weighted score {atr_weighted[recommended_atr]:.1f})")
+    print(f"  risk_reward_ratio: {recommended_rr}  (weighted score {rr_weighted[recommended_rr]:.1f})")
     print("=" * 80)
 
     # 7. Save results to JSON

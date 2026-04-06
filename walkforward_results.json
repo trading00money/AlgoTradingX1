@@ -9,9 +9,9 @@
       "atr_multiplier": 3.0,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 1.799491861755061,
-    "test_score": 3.2914652717780006,
-    "efficiency": 1.8291081731082708
+    "train_score": 1.9694234767083243,
+    "test_score": 3.429666881255226,
+    "efficiency": 1.7414572954048149
   },
   {
     "fold": 2,
@@ -21,11 +21,11 @@
     "test_end": "2022-07-15 06:00:00",
     "best_params": {
       "atr_multiplier": 3.0,
-      "risk_reward_ratio": 4.0
+      "risk_reward_ratio": 5.0
     },
-    "train_score": 1.7334397190012945,
-    "test_score": -1.5484681597037508,
-    "efficiency": -0.8932921882024757
+    "train_score": 1.6125720760498352,
+    "test_score": -4.3852541132505545,
+    "efficiency": -2.7194158812378144
   },
   {
     "fold": 3,
@@ -37,9 +37,9 @@
       "atr_multiplier": 3.0,
       "risk_reward_ratio": 4.0
     },
-    "train_score": 1.115492948750521,
-    "test_score": 3.1955398643437953,
-    "efficiency": 2.864688537855092
+    "train_score": 1.69223539053569,
+    "test_score": 2.5633958355765194,
+    "efficiency": 1.5147986207551523
   },
   {
     "fold": 4,
@@ -51,9 +51,9 @@
       "atr_multiplier": 3.0,
       "risk_reward_ratio": 4.0
     },
-    "train_score": 1.963702124128516,
-    "test_score": 1.9480739274835754,
-    "efficiency": 0.9920414626776063
+    "train_score": 1.9323503720840185,
+    "test_score": 2.0331021695507925,
+    "efficiency": 1.0521395078875444
   },
   {
     "fold": 5,
@@ -62,12 +62,12 @@
     "test_start": "2023-01-19 04:00:00",
     "test_end": "2023-04-21 22:00:00",
     "best_params": {
-      "atr_multiplier": 2.5,
-      "risk_reward_ratio": 5.0
+      "atr_multiplier": 3.0,
+      "risk_reward_ratio": 4.0
     },
-    "train_score": 2.3961030970231363,
-    "test_score": 4.021793294589759,
-    "efficiency": 1.6784725580407385
+    "train_score": 2.169803862579591,
+    "test_score": 1.8684986076883314,
+    "efficiency": 0.8611371008746155
   },
   {
     "fold": 6,
@@ -76,12 +76,12 @@
     "test_start": "2023-04-21 23:00:00",
     "test_end": "2023-07-24 22:00:00",
     "best_params": {
-      "atr_multiplier": 2.5,
-      "risk_reward_ratio": 5.0
+      "atr_multiplier": 2.0,
+      "risk_reward_ratio": 4.0
     },
-    "train_score": 2.2820855786955088,
-    "test_score": -1.0250315453721757,
-    "efficiency": -0.449164376192284
+    "train_score": 0.9284352145748598,
+    "test_score": 0.6943483720630387,
+    "efficiency": 0.7478694917673799
   },
   {
     "fold": 7,
@@ -90,12 +90,12 @@
     "test_start": "2023-07-24 23:00:00",
     "test_end": "2023-10-24 18:00:00",
     "best_params": {
-      "atr_multiplier": 2.5,
-      "risk_reward_ratio": 5.0
+      "atr_multiplier": 3.0,
+      "risk_reward_ratio": 4.0
     },
-    "train_score": 2.219101446016593,
-    "test_score": -1.8169058493547066,
-    "efficiency": -0.8187574536604222
+    "train_score": 1.6152326223197773,
+    "test_score": 1.572704302854895,
+    "efficiency": 0.9736704677225974
   },
   {
     "fold": 8,
@@ -105,11 +105,11 @@
     "test_end": "2024-01-26 19:00:00",
     "best_params": {
       "atr_multiplier": 3.0,
-      "risk_reward_ratio": 4.0
+      "risk_reward_ratio": 5.0
     },
-    "train_score": 1.373200234722355,
-    "test_score": 2.7289002633159454,
-    "efficiency": 1.9872558963461704
+    "train_score": 1.6657818950331396,
+    "test_score": 2.6995383744907078,
+    "efficiency": 1.6205833323917849
   },
   {
     "fold": 9,
@@ -118,12 +118,12 @@
     "test_start": "2024-01-26 20:00:00",
     "test_end": "2024-04-30 15:00:00",
     "best_params": {
-      "atr_multiplier": 2.0,
+      "atr_multiplier": 3.0,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 1.8026418739552104,
-    "test_score": 1.9389288609409354,
-    "efficiency": 1.075604028151579
+    "train_score": 1.8590311055698436,
+    "test_score": 2.8681280853263207,
+    "efficiency": 1.5428080125895265
   },
   {
     "fold": 10,
@@ -135,9 +135,9 @@
       "atr_multiplier": 3.0,
       "risk_reward_ratio": 4.0
     },
-    "train_score": 1.6295287931092168,
-    "test_score": 2.9769471014560995,
-    "efficiency": 1.8268760356028726
+    "train_score": 2.057876020971631,
+    "test_score": 1.0207261604877784,
+    "efficiency": 0.49600955066566166
   },
   {
     "fold": 11,
@@ -146,12 +146,12 @@
     "test_start": "2024-07-31 16:00:00",
     "test_end": "2024-10-31 10:00:00",
     "best_params": {
-      "atr_multiplier": 3.0,
-      "risk_reward_ratio": 5.0
+      "atr_multiplier": 2.5,
+      "risk_reward_ratio": 4.0
     },
-    "train_score": 2.267069415913276,
-    "test_score": 4.089133303402119,
-    "efficiency": 1.80370890926374
+    "train_score": 2.095297084872674,
+    "test_score": 2.4936695774745976,
+    "efficiency": 1.1901269731524164
   },
   {
     "fold": 12,
@@ -163,9 +163,9 @@
       "atr_multiplier": 2.5,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 3.3233831990214835,
-    "test_score": 4.850364996062482,
-    "efficiency": 1.4594660638263424
+    "train_score": 2.369686689941959,
+    "test_score": 4.895982397885354,
+    "efficiency": 2.0660884912196016
   },
   {
     "fold": 13,
@@ -174,12 +174,12 @@
     "test_start": "2025-02-05 09:00:00",
     "test_end": "2025-05-09 04:00:00",
     "best_params": {
-      "atr_multiplier": 2.5,
+      "atr_multiplier": 3.0,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 3.827302455675396,
-    "test_score": 2.0480446131338566,
-    "efficiency": 0.5351143884896974
+    "train_score": 2.6514296118351894,
+    "test_score": 2.235650229692829,
+    "efficiency": 0.8431867169747046
   },
   {
     "fold": 14,
@@ -188,12 +188,12 @@
     "test_start": "2025-05-09 05:00:00",
     "test_end": "2025-08-11 06:00:00",
     "best_params": {
-      "atr_multiplier": 2.0,
-      "risk_reward_ratio": 5.0
+      "atr_multiplier": 2.5,
+      "risk_reward_ratio": 4.0
     },
-    "train_score": 3.656266750211732,
-    "test_score": 0.6264988156201823,
-    "efficiency": 0.17134931842265125
+    "train_score": 2.9897449939996634,
+    "test_score": 1.3975128552245037,
+    "efficiency": 0.467435469589973
   },
   {
     "fold": 15,
@@ -205,9 +205,9 @@
       "atr_multiplier": 2.0,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 3.3220824990085123,
-    "test_score": 2.2430663717230344,
-    "efficiency": 0.6751988767264165
+    "train_score": 3.1561081102192925,
+    "test_score": 3.40251562151907,
+    "efficiency": 1.078073216345766
   },
   {
     "fold": 16,
@@ -216,11 +216,11 @@
     "test_start": "2025-11-11 03:00:00",
     "test_end": "2026-02-16 01:00:00",
     "best_params": {
-      "atr_multiplier": 2.5,
+      "atr_multiplier": 2.0,
       "risk_reward_ratio": 5.0
     },
-    "train_score": 2.7726415548998227,
-    "test_score": 2.276070331877375,
-    "efficiency": 0.8209032025272416
+    "train_score": 3.310121797688909,
+    "test_score": 3.052628008292819,
+    "efficiency": 0.9222101768050139
   }
 ]

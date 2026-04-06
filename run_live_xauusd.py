@@ -83,6 +83,13 @@ SHORT_SCALE      = 0.5   # Shorts use 50% of normal position size
 PARTIAL_EXIT_R   = 3.0   # Close 50% of position when unrealized profit hits 3R
 PARTIAL_EXIT_PCT = 0.5   # Fraction to close at PARTIAL_EXIT_R
 TIME_STOP_BARS   = 30    # Close losing trade if still underwater after 30 bars
+
+# Walk-forward validated entry filters (mirroring backtester.py / risk_config.yaml)
+MA_TREND_PERIOD      = 200          # MA(200 H1 bars) trend direction filter
+SEASONAL_WEAK_MONTHS = {4,5,6,7,8,9}  # Apr-Sep: Q2/Q3 gold edge degradation
+SEASONAL_SIZE_SCALE  = 0.25         # 25% normal size during weak months
+ADX_GATE_PERIOD      = 14           # ADX period (Wilder smoothing)
+ADX_GATE_THRESHOLD   = 20.0         # Block entries in weak months when ADX < 20
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -704,8 +711,14 @@ class LiveTrader:
                     f"Partial exit at {PARTIAL_EXIT_R}R: closing {close_lots:.2f} lots"
                 )
                 if self.mt5.partial_close(ticket, close_lots):
-                    # Move SL to breakeven
-                    self.mt5.modify_sl(ticket, round(entry_price, 2))
+                    # Move SL to breakeven + 0.3R buffer (matches backtester
+                    # breakeven_buffer_r: 0.3 applied after partial_exit_move_be)
+                    be_buffer = 0.3 * init_risk
+                    if side == 'long':
+                        be_sl = round(entry_price + be_buffer, 2)
+                    else:
+                        be_sl = round(entry_price - be_buffer, 2)
+                    self.mt5.modify_sl(ticket, be_sl)
                     self.state['position']['partial_done'] = True
                     self.state['position']['bars_open']    = bars_open
                     save_state(self.state)
@@ -737,15 +750,17 @@ class LiveTrader:
                 save_state(self.state)
             return
 
-        # ── 3. REGIME EXIT: opposite signal ──────────────────────────────────
-        if not signals.empty and 'signal' in signals.columns:
-            last_signal = signals['signal'].iloc[-1]
-            regime_exit = (side == 'long'  and last_signal == -1) or \
-                          (side == 'short' and last_signal ==  1)
+        # ── 3. REGIME EXIT: Ehlers fast-regime reversal ──────────────────────
+        # Uses signals['regime'] column (integers: 1=bull, -1=bear, 0=neutral).
+        # Matches backtester logic: exit long when regime <= 0 (bear or neutral),
+        # exit short when regime >= 0 (bull or neutral).
+        if not signals.empty and 'regime' in signals.columns:
+            last_regime = int(signals['regime'].iloc[-1])
+            regime_exit = (side == 'long'  and last_regime <= 0) or \
+                          (side == 'short' and last_regime >= 0)
             if regime_exit:
                 logger.info(
-                    f"Regime exit: signal reversed to "
-                    f"{'SHORT' if last_signal == -1 else 'LONG'} → closing {ticket}"
+                    f"Regime exit: regime={last_regime} conflicts with {side.upper()} → closing {ticket}"
                 )
                 if self.mt5.close_position(ticket):
                     self._log_trade_close(pos_state, reason='regime_exit')
@@ -753,7 +768,7 @@ class LiveTrader:
                         ticket=ticket, side=side, lots=mt5_pos['volume'],
                         entry=entry_price, current=current_price,
                         unrealized_r=unrealized_r, bars=bars_open,
-                        new_signal=int(last_signal),
+                        new_signal=last_regime,
                     )
                     self.state['position'] = None
                     save_state(self.state)
@@ -782,7 +797,74 @@ class LiveTrader:
 
         entry_price = data['close'].iloc[-1]
         side        = 'long' if signal == 1 else 'short'
-        sl_dist     = atr * ATR_MULTIPLIER
+        current_month = data.index[-1].month
+
+        # ── Vol-adaptive SL multiplier (matches RiskManager / risk_config.yaml) ─
+        # Scales ATR multiplier down from 3.0 to 1.5 when ATR is above the 70th
+        # percentile of the rolling 200-bar window.  Prevents oversized stops
+        # (and undersized position sizes) during abnormally volatile regimes.
+        VOL_ADAPTIVE_THRESHOLD = 0.70   # matches vol_adaptive_percentile: 70
+        VOL_ADAPTIVE_MIN_MULT  = 1.5    # matches vol_adaptive_min_multiplier: 1.5
+        MAX_SL_DISTANCE        = 100.0  # matches max_sl_distance: 100.0 ($100/oz)
+
+        atr_pct = atr_series.rolling(200, min_periods=50).rank(pct=True).iloc[-1]
+        effective_atr_mult = ATR_MULTIPLIER
+        if not math.isnan(atr_pct) and atr_pct > VOL_ADAPTIVE_THRESHOLD:
+            scale = (1.0 - atr_pct) / (1.0 - VOL_ADAPTIVE_THRESHOLD)
+            effective_atr_mult = (
+                VOL_ADAPTIVE_MIN_MULT
+                + (ATR_MULTIPLIER - VOL_ADAPTIVE_MIN_MULT) * scale
+            )
+            logger.info(
+                f"Vol-adaptive SL: ATR pct={atr_pct:.1%} → "
+                f"mult {ATR_MULTIPLIER:.1f} → {effective_atr_mult:.2f}"
+            )
+
+        # ── MA trend direction filter (year-round) ────────────────────────
+        # Only enter longs when close > MA(200); only shorts when close < MA(200).
+        # Blocks counter-trend entries during macro regime shifts (e.g. 2022 gold
+        # crash where ADX was high but trend was bearish vs. strategy's long bias).
+        min_p = max(10, MA_TREND_PERIOD // 10)
+        ma200 = data['close'].rolling(MA_TREND_PERIOD, min_periods=min_p).mean().iloc[-1]
+        if not math.isnan(ma200):
+            if side == 'long' and entry_price < ma200:
+                logger.info(
+                    f"MA trend filter BLOCKED long: price {entry_price:.2f} < MA200 {ma200:.2f}"
+                )
+                return
+            if side == 'short' and entry_price > ma200:
+                logger.info(
+                    f"MA trend filter BLOCKED short: price {entry_price:.2f} > MA200 {ma200:.2f}"
+                )
+                return
+
+        # ── Seasonal ADX gate (weak months only) ─────────────────────────
+        # During Apr-Sep, block entries when ADX < 20 (no directional trend).
+        if current_month in SEASONAL_WEAK_MONTHS:
+            from backtest.backtester import calculate_adx
+            adx_series = calculate_adx(data, period=ADX_GATE_PERIOD)
+            adx_val = float(adx_series.iloc[-1])
+            if adx_val < ADX_GATE_THRESHOLD:
+                logger.info(
+                    f"Seasonal ADX gate BLOCKED entry: ADX {adx_val:.1f} < {ADX_GATE_THRESHOLD} "
+                    f"(month={current_month}, weak season)"
+                )
+                return
+
+        # ── Seasonal position-size scaling ────────────────────────────────
+        # During weak months, trade at 25% of normal risk to limit drawdowns.
+        effective_risk_pct = PAPER_RISK_PCT
+        if current_month in SEASONAL_WEAK_MONTHS:
+            effective_risk_pct = PAPER_RISK_PCT * SEASONAL_SIZE_SCALE
+            logger.info(
+                f"Seasonal size filter: risk scaled to {effective_risk_pct:.3f}% "
+                f"(month={current_month}, {SEASONAL_SIZE_SCALE:.0%} of normal)"
+            )
+
+        sl_dist = atr * effective_atr_mult
+        if sl_dist > MAX_SL_DISTANCE:
+            logger.info(f"SL cap: dist {sl_dist:.1f} > {MAX_SL_DISTANCE:.0f} → capped")
+            sl_dist = MAX_SL_DISTANCE
 
         if side == 'long':
             sl = round(entry_price - sl_dist, 2)
@@ -791,13 +873,13 @@ class LiveTrader:
             sl = round(entry_price + sl_dist, 2)
             tp = round(entry_price - sl_dist * RISK_REWARD, 2)
 
-        lots = lots_from_risk(equity, entry_price, sl, side)
+        lots = lots_from_risk(equity, entry_price, sl, side, risk_pct=effective_risk_pct)
 
         logger.info(
             f"ENTRY SIGNAL: {side.upper()} | "
             f"Entry≈{entry_price:.2f} | SL={sl:.2f} | TP={tp:.2f} | "
             f"ATR={atr:.2f} | Lots={lots:.2f} | "
-            f"Risk=${equity * PAPER_RISK_PCT / 100:.0f} ({PAPER_RISK_PCT}%)"
+            f"Risk=${equity * effective_risk_pct / 100:.0f} ({effective_risk_pct:.3f}%)"
         )
 
         mt5_side = 'BUY' if side == 'long' else 'SELL'
@@ -833,7 +915,7 @@ class LiveTrader:
             self.notifier.trade_opened(
                 side=side, entry=actual_entry, sl=sl, tp=tp,
                 lots=lots, atr=atr, equity=equity,
-                risk_pct=PAPER_RISK_PCT, ticket=result['ticket'],
+                risk_pct=effective_risk_pct, ticket=result['ticket'],
             )
         else:
             logger.error("Order rejected by MT5. No position opened.")
@@ -911,7 +993,11 @@ class LiveTrader:
                     logger.warning("Signal engine returned no output. Skipping bar.")
                     continue
 
-                n_signals = int(signals['signal'].isin([1, -1]).sum())
+                # signal column returns strings: "BUY"/"SELL"/"HOLD"
+                # (matches SignalType enum values in signal_engine.py)
+                _LONG_SIG  = {"BUY", "STRONG_BUY"}
+                _SHORT_SIG = {"SELL", "STRONG_SELL"}
+                n_signals = int(signals['signal'].isin(_LONG_SIG | _SHORT_SIG).sum())
                 logger.info(
                     f"Signals: {n_signals} non-neutral bars | "
                     f"Last bar signal: {signals['signal'].iloc[-1]}"
@@ -923,10 +1009,12 @@ class LiveTrader:
                 # ── Check for new entry ─────────────────────────────────────
                 if self.state.get('position') is None:
                     last_signal = signals['signal'].iloc[-1]
-                    if last_signal in (1, -1):
-                        name = 'LONG' if last_signal == 1 else 'SHORT'
-                        logger.info(f"New {name} signal on {data.index[-1]} → entering trade")
-                        self.enter_trade(data, int(last_signal))
+                    if last_signal in _LONG_SIG:
+                        logger.info(f"New LONG signal on {data.index[-1]} → entering trade")
+                        self.enter_trade(data, 1)
+                    elif last_signal in _SHORT_SIG:
+                        logger.info(f"New SHORT signal on {data.index[-1]} → entering trade")
+                        self.enter_trade(data, -1)
                     else:
                         logger.info("No entry signal. Flat.")
                 else:

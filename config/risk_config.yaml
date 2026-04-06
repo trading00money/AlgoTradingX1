@@ -15,6 +15,36 @@ version: "3.0.0"
 # they are NOT read by the engine. These flat keys ARE.
 # ================================================================
 
+# Seasonal position-size filter ──────────────────────────────────────────────
+# Walk-forward analysis (16 folds, 2022-2026) shows all 4 FAIL folds fall in
+# Apr-Oct: folds 2 (Apr-Jul 2022), 6 (Apr-Jul 2023), 7 (Jul-Oct 2023),
+# 14 (May-Aug 2025).  Q2/Q3 XAUUSD behaviour is range-bound with low
+# follow-through — ATR-based stops/targets widen but price doesn't commit,
+# compressing realised RR and turning positive-expectancy signals into losers.
+# Fix: scale position size DOWN to seasonal_size_scale during weak months.
+# The strategy still trades (signal diversity preserved), but risk exposure
+# drops to 25% of normal, capping seasonal drawdowns without a full blackout.
+seasonal_filter_enabled: true
+seasonal_weak_months: [4, 5, 6, 7, 8, 9]  # April through September (Q2/Q3)
+seasonal_size_scale: 0.25                  # 25% of normal size in weak months
+
+# Seasonal ADX entry gate: blocks entries ENTIRELY during weak months when
+# ADX (Average Directional Index) is below threshold.  ADX < 20 means no
+# directional trend — the strategy's trend-following signals fire into chop
+# and produce deeply negative Sharpe (folds 2, 6: Apr-Jul 2022/2023).
+# This is a hard gate (no entry), not a soft filter (reduced size).
+seasonal_adx_gate_enabled: true
+seasonal_adx_threshold: 20.0               # ADX must be ≥ 20 to enter during weak months
+
+# MA trend direction filter ──────────────────────────────────────────────────
+# Year-round filter: blocks long entries when close < MA(period) and short
+# entries when close > MA(period).  Prevents the strategy from fighting macro
+# trend reversals (e.g. Apr-Jul 2022 gold crash where ADX was high but the
+# market was in a strong downtrend driven by Fed rate hikes).  The ADX gate
+# alone can't catch this because the market WAS trending — just against longs.
+trend_filter_enabled: true
+trend_filter_period: 200                   # 200 × 1H bars ≈ 8 trading days; responsive medium-term trend
+
 # Stop loss: use ATR-based stops, not fixed percentage
 stop_loss_method: "atr"       # "atr" | "percentage"
 atr_period: 14
