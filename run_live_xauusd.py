@@ -2,8 +2,9 @@
 run_live_xauusd.py — Live Paper Trading: GOLD (XAUUSD) on MetaTrader 5
 Executes the v5 Pullback Strategy — identical logic to the validated backtest.
 
-Strategy results (5-year XAUUSD H1 backtest):
-  Return: 206%  |  Sharpe: 2.30  |  Max DD: 8.49%  |  PF: 1.94  |  Calmar: 2.63
+Strategy results (5-year XAUUSD H1 backtest, run.py):
+  Return: 147.41%  |  Sharpe: 2.19  |  Max DD: 5.89%  |  PF: 2.17  |  Calmar: 3.06
+  Trades: 495  |  WR: 45.9%  |  Avg Win: $1,217  |  Avg Loss: -$474  |  Expectancy: $301
 
 How it works (bar-by-bar, hourly):
   1. Waits for H1 bar close (UTC hour boundary + 2s buffer)
@@ -264,6 +265,57 @@ class TelegramNotifier:
             f"Account : {login}  |  {server}\n"
             f"Balance : {currency} {balance:,.2f}\n"
             f"Equity  : {currency} {equity:,.2f}\n"
+            f"Time    : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+
+    def signal_detected(self, side: str, bar_time: str, close: float,
+                        ema20: float, atr: float, sl: float, tp: float,
+                        partial_tp: float, lots: float, risk_usd: float,
+                        risk_pct: float, filters: Dict):
+        direction = "LONG" if side == 'long' else "SHORT"
+        icon      = "🎯" if side == 'long' else "🎯"
+        sl_dist   = abs(close - sl)
+        zone_lo   = min(close, ema20)
+        zone_hi   = max(close, ema20)
+        self.send(
+            f"{icon} <b>SIGNAL DETECTED — {direction} GOLD</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Bar     : {bar_time}\n"
+            f"Close   : <b>{close:.2f}</b>  |  EMA20: {ema20:.2f}\n"
+            f"Zone    : {zone_lo:.2f} – {zone_hi:.2f}\n"
+            f"\n"
+            f"── Levels ──────────────────────\n"
+            f"Stop Loss  : {sl:.2f}  ({sl_dist:.2f}/oz, {ATR_MULTIPLIER}×ATR)\n"
+            f"Take Profit: {tp:.2f}  (RR {RISK_REWARD:.0f}:1)\n"
+            f"Partial TP : {partial_tp:.2f}  ({PARTIAL_EXIT_R:.0f}R)\n"
+            f"\n"
+            f"── Sizing ───────────────────────\n"
+            f"Lots    : {lots:.2f}\n"
+            f"Risk    : ${risk_usd:.0f}  ({risk_pct}% equity)\n"
+            f"ATR     : {atr:.2f}\n"
+            f"\n"
+            f"── Filters ──────────────────────\n"
+            f"EMA200  : {filters.get('ema200','?')}  |  D1 EMA50: {filters.get('d1_ema50','?')}\n"
+            f"ADX     : {filters.get('adx','?')}  |  Session: {filters.get('session','?')}\n"
+            f"MAMA    : {filters.get('mama','?')}  |  ITrend : {filters.get('itrend','?')}\n"
+            f"EBSW    : {filters.get('ebsw','?')}\n"
+            f"\n"
+            f"⏳ Placing order now…\n"
+            f"Time    : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+
+    def shutdown(self, reason: str = 'manual', account: Dict = None):
+        pos_line = ""
+        if account:
+            equity   = account.get('equity', 0.0)
+            currency = account.get('currency', 'USD')
+            pos_line = f"\nEquity  : {currency} {equity:,.2f}"
+        self.send(
+            f"🔴 <b>AlgoTradingX1 — STOPPED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Reason  : {reason}\n"
+            f"Symbol  : {MT5_SYMBOL} (XAUUSD){pos_line}\n"
+            f"Note    : Open position (if any) remains in MT5\n"
             f"Time    : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
         )
 
@@ -882,6 +934,43 @@ class LiveTrader:
             f"Risk=${equity * effective_risk_pct / 100:.0f} ({effective_risk_pct:.3f}%)"
         )
 
+        # ── Telegram signal alert (fires BEFORE order is placed) ─────────────
+        partial_tp = round(entry_price + sl_dist * PARTIAL_EXIT_R, 2) if side == 'long' \
+                else round(entry_price - sl_dist * PARTIAL_EXIT_R, 2)
+        ema20_val  = float(data['close'].ewm(span=20, adjust=False).mean().iloc[-1])
+
+        # Collect filter states for the alert
+        ema200_val = float(data['close'].ewm(span=200, adjust=False).mean().iloc[-1])
+        adx_display = "?"
+        try:
+            from backtest.backtester import calculate_adx
+            adx_display = f"{float(calculate_adx(data, period=ADX_GATE_PERIOD).iloc[-1]):.1f}"
+        except Exception:
+            pass
+        filters = {
+            'ema200':  'BULL' if entry_price > ema200_val else 'BEAR',
+            'd1_ema50': 'BULL' if side == 'long' else 'BEAR',
+            'adx':     adx_display,
+            'session': 'London/NY',
+            'mama':    'BULL' if side == 'long' else 'BEAR',
+            'itrend':  'BULL' if side == 'long' else 'BEAR',
+            'ebsw':    'BULL' if side == 'long' else 'BEAR',
+        }
+        self.notifier.signal_detected(
+            side=side,
+            bar_time=data.index[-1].strftime('%Y-%m-%d %H:%M UTC'),
+            close=entry_price,
+            ema20=ema20_val,
+            atr=atr,
+            sl=sl,
+            tp=tp,
+            partial_tp=partial_tp,
+            lots=lots,
+            risk_usd=equity * effective_risk_pct / 100,
+            risk_pct=effective_risk_pct,
+            filters=filters,
+        )
+
         mt5_side = 'BUY' if side == 'long' else 'SELL'
         result = self.mt5.place_order(
             symbol=MT5_SYMBOL,
@@ -1029,6 +1118,8 @@ class LiveTrader:
             except KeyboardInterrupt:
                 logger.info("Stopped by user. Open position (if any) remains in MT5.")
                 logger.info(f"State saved to {STATE_FILE}")
+                acct_info = self.mt5.account_info()
+                self.notifier.shutdown(reason='Stopped by user (Ctrl+C)', account=acct_info)
                 break
             except Exception as e:
                 logger.error(f"Unexpected error in main loop: {e}", exc_info=True)

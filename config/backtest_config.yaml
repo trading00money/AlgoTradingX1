@@ -43,3 +43,47 @@ slippage:
   # 0.01% at $3800 = $0.38/oz = ~3.8 pips per side. Conservative but realistic.
   # Prior value of 0.05% = $19/oz = 190 pips. Far above any real gold broker.
   value: 0.01
+
+# ================================================================
+# XAGUSD (Silver) Backtest Configuration
+# ================================================================
+# Separate section for silver — XAUUSD settings above remain unchanged.
+# To run a silver backtest, point backtest_config.symbol to "XAGUSD"
+# and merge these overrides into the flat config, or use run.py --symbol XAGUSD.
+#
+# Silver vs Gold key differences:
+#   - Price ~$30/oz vs ~$3800/oz  →  percentage-based costs scale correctly
+#   - Higher relative volatility (annualised vol ~25-30% vs gold ~15-18%)
+#   - Wider relative spreads (0.02-0.05/oz = 2-5 pips at $0.01 pip)
+#   - More mean-reverting intraday; trends persist on daily+ timeframes
+#   - Stronger industrial demand component → macro sensitivity differs
+# ================================================================
+symbols:
+  XAGUSD:
+    symbol: "XAGUSD"
+    start_date: "2021-01-01"
+    end_date: "2026-04-01"
+    timeframe: "1h"
+
+    instrument:
+      pip_value: 0.01          # 1 pip = $0.01 per oz (same convention as gold)
+      lot_size: 5000           # 1 standard lot = 5,000 oz silver
+      min_lot: 0.01
+      typical_spread_pips: 20  # ~$0.20 spread on silver ECN
+      session_volatility_multiplier: 1.8  # Silver is ~80% more volatile than FX majors
+
+    initial_capital: 100000.0
+
+    commission:
+      type: "percentage"
+      # Silver ECN typical: $5-8 per standard lot (5,000 oz).
+      # At silver $30, 1 lot = $150k notional → $8/lot = 0.005%.
+      # Using 0.005% — slightly above actual ECN to be conservative.
+      value: 0.005
+
+    slippage:
+      type: "percentage"
+      # Silver ECN spread: $0.02-0.05/oz = 2-5 pips.
+      # 0.015% at $30 = $0.0045/oz ≈ 0.45 pips per side.
+      # Slightly higher than gold due to wider relative spreads.
+      value: 0.015

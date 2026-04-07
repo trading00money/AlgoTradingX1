@@ -1,0 +1,326 @@
+================================================================
+  AlgoTradingX1 — STRATEGY SUMMARY
+  Instrument : XAUUSD (Gold) — H1
+  Version    : v5 Pullback Strategy
+  Updated    : 2026-04-07
+================================================================
+
+
+================================================================
+  SECTION 1 — STRATEGY OVERVIEW
+================================================================
+
+NAME      : v5 EMA20 Pullback Strategy
+EDGE      : Enter on pullbacks to dynamic support (EMA20) within
+            confirmed macro trends, confirmed by Ehlers DSP state
+TIMEFRAME : H1 (1-hour bars)
+INSTRUMENT: XAUUSD / GOLD CFD (MT5 symbol: GOLD)
+DATA FEED : 3,500 H1 bars required for indicator convergence
+            (bottleneck: D1 EMA50 needs 115 daily bars = 2,760 H1)
+
+ARCHITECTURE PHILOSOPHY
+  Unlike v1–v4 which entered on indicator crossovers (timing
+  problem), v5 enters on PULLBACKS TO DYNAMIC SUPPORT within
+  confirmed trends. This gives:
+    - Better entry price (at or near support)
+    - Tighter stop loss placement (support is close to entry)
+    - Higher statistical reliability (trend continuation from
+      support > crossover timing)
+    - Ehlers STATE filters (not crossovers) confirm direction
+      without timing noise
+
+
+================================================================
+  SECTION 2 — BACKTEST PERFORMANCE (5-Year, 2021–2026)
+================================================================
+
+  Data source    : MT5 GOLD H1 (authoritative broker feed)
+  Period         : 5 years (~43,800 bars)
+  Risk per trade : 1.0% equity (live paper uses 0.5%)
+  Starting equity: $100,000
+
+  Total Return   : 147.41%   ($100,000 → $247,415)
+  Total Net Profit: $147,415
+  Sharpe Ratio   : 2.19
+  Max Drawdown   : 5.89%
+  Calmar Ratio   : 3.06
+  Profit Factor  : 2.17
+
+  Total Trades   : 495
+  Win Rate       : 45.86%  (227 wins / 268 losses)
+  Avg Win        : $1,217
+  Avg Loss       : -$474
+  Avg Trade PnL  : $301
+  Expectancy     : $301 per trade
+
+  Long trades    : 335  |  WR: 47.8%  |  PF: 2.26
+                         Avg Win: $1,533  |  Avg Loss: -$619
+  Short trades   : 160  |  WR: 41.9%  |  PF: 1.65
+                         Avg Win: $465   |  Avg Loss: -$203
+
+  Exit breakdown :
+    Regime Exit  : 360 trades  avg $+179
+    Stop Loss    :  71 trades  avg $-906
+    Partial Exit :  48 trades  avg $+1,943
+    Take Profit  :  16 trades  avg $+3,484
+
+  Monte Carlo (10,000 simulations):
+    Max Drawdown  p5 / p50 / p95 : 3.4% / 5.5% / 9.9%
+    Final equity  p5 / p50 / p95 : $202K / $249K / $297K
+    Ruin probability              : 0.0%
+
+  Walk-forward validated: 16 folds (quarterly, 2022–2026)
+  PASS  (efficiency >= 0.6) : 13 / 16
+  MARGINAL (0.4–0.6)        :  2 / 16  (folds 10, 14 — Q2/Q3 seasonal)
+  FAIL  (efficiency < 0.4)  :  1 / 16  (fold 2 — Apr–Jul 2022)
+  Avg efficiency            : 0.90   → ROBUST
+
+  Fold detail:
+    Fold  Test Period          ATR   RR   Train S  Test S   Eff    Status
+    1     2022-01 → 2022-04   3.0  5.0   1.97     3.43    1.74   PASS
+    2     2022-04 → 2022-07   3.0  5.0   1.61    -4.39   -2.72   FAIL
+    3     2022-07 → 2022-10   3.0  4.0   1.69     2.56    1.51   PASS
+    4     2022-10 → 2023-01   3.0  4.0   1.93     2.03    1.05   PASS
+    5     2023-01 → 2023-04   3.0  4.0   2.17     1.87    0.86   PASS
+    6     2023-04 → 2023-07   2.0  4.0   0.93     0.69    0.75   PASS
+    7     2023-07 → 2023-10   3.0  4.0   1.62     1.57    0.97   PASS
+    8     2023-10 → 2024-01   3.0  5.0   1.67     2.70    1.62   PASS
+    9     2024-01 → 2024-04   3.0  5.0   1.86     2.87    1.54   PASS
+    10    2024-04 → 2024-07   3.0  4.0   2.06     1.02    0.50   MARGINAL
+    11    2024-07 → 2024-10   2.5  4.0   2.10     2.49    1.19   PASS
+    12    2024-10 → 2025-02   2.5  5.0   2.37     4.90    2.07   PASS
+    13    2025-02 → 2025-05   3.0  5.0   2.65     2.24    0.84   PASS
+    14    2025-05 → 2025-08   2.5  4.0   2.99     1.40    0.47   MARGINAL
+    15    2025-08 → 2025-11   2.0  5.0   3.16     3.40    1.08   PASS
+    16    2025-11 → 2026-02   2.0  5.0   3.31     3.05    0.92   PASS
+
+  Parameter stability (season-weighted: Q4/Q1 = 1.0, Q2/Q3 = 0.5):
+    atr_multiplier    raw: {3.0:10, 2.0:3, 2.5:3}  weighted: {3.0:8.0, 2.0:2.0, 2.5:2.0}
+    risk_reward_ratio raw: {5.0:8, 4.0:8}           weighted: {5.0:7.0, 4.0:5.0}
+
+  Recommended live params (season-weighted):
+    atr_multiplier    : 3.0  (score 8.0)
+    risk_reward_ratio : 5.0  (score 7.0)
+
+  Scale-up gate (live trading):
+    30+ executed live trades
+    Live Profit Factor >= 1.4
+    Live/Backtest PF ratio >= 0.70  (e.g. 1.5 live vs 2.17 backtest = 0.69)
+    Max drawdown not approaching 15% of account
+
+
+================================================================
+  SECTION 3 — ENTRY SIGNAL LOGIC
+================================================================
+
+  File: core/signal_engine.py → generate_signals_for_backtest()
+
+  LONG ENTRY (signal = 1):
+    All of the following must be true on the same H1 bar close:
+
+    Pullback trigger:
+      low  <= EMA20 + 0.5 × ATR(14)   (price touched EMA20 zone)
+      low  >= EMA20 - 1.0 × ATR(14)   (not too far below EMA20)
+      close > EMA20                    (bar closed above EMA20 → support held)
+
+    Ehlers state confirmation (all 3):
+      MAMA > FAMA                      (adaptive trend: bullish)
+      ITrend > ITrend_trigger          (DSP trendline: bullish)
+      EBSW > -0.5                      (Even Better Sinewave: not in downturn)
+
+    Regime gate (all 5):
+      close > EMA200 AND EMA200_slope > 0   (H1 macro trend: bullish)
+      D1 close > D1 EMA50                   (intermediate trend: bullish)
+      DI+ > DI- + 1                         (directional: +1 buffer)
+      ADX(14) > 15                          (moderate trend required)
+      07:00 <= bar_hour < 20:00 UTC         (London + NY session)
+
+  SHORT ENTRY (signal = -1):
+    Mirror of long, with conditions inverted:
+      high >= EMA20 - 0.5 × ATR(14)
+      high <= EMA20 + 1.0 × ATR(14)
+      close < EMA20                    (bar closed below EMA20 → resistance held)
+      MAMA < FAMA, ITrend < trigger, EBSW < 0.5
+      close < EMA200, D1 below D1 EMA50, DI- > DI+ + 1, ADX > 15, session OK
+
+  COOLDOWN: 5-bar global cooldown between any two signals (same
+  direction or opposite). Prevents repeated entries in choppy zones.
+
+
+================================================================
+  SECTION 4 — INDICATOR SPECIFICATIONS
+================================================================
+
+  EMA20    : close.ewm(span=20, adjust=False)  — pullback target
+  EMA200   : close.ewm(span=200, adjust=False) — H1 macro regime
+  EMA200_slope: ema200 - ema200.shift(20)      — momentum direction
+  D1 EMA50 : daily close resampled to D, ewm(span=50), ffilled to H1
+  ATR(14)  : EMA-smoothed true range, alpha=1/14 (Wilder)
+  ADX(14)  : Wilder-smoothed DX, alpha=1/14
+  DI+/DI-  : EMA-smoothed directional movement, alpha=1/14
+
+  MAMA     : Mesa Adaptive Moving Average (modules/ehlers/mama.py)
+             Adaptive phase-locked trend following
+  ITrend   : Instantaneous Trendline, alpha=0.07
+             (modules/ehlers/instantaneous_trendline.py)
+  EBSW     : Even Better Sinewave (modules/ehlers/sinewave_indicator.py)
+             HP(40) + SuperSmoother(10) cycle detector
+
+  Session filter : hour >= 7 AND hour < 20 (UTC)
+                   Includes London (07:00–16:00) and NY (13:00–20:00)
+
+
+================================================================
+  SECTION 5 — EXIT LOGIC
+================================================================
+
+  MT5 SL/TP (hard levels, set at entry):
+    SL = entry ± ATR(14) × 3.0 (effective multiplier, see vol-adaptive below)
+    TP = entry ± SL_distance × 5.0
+
+  Partial exit at 3R:
+    When unrealized profit >= 3.0 × initial_risk:
+      Close 50% of position at market
+      Move SL to breakeven + 0.3R buffer
+    Rationale: at 5R TP, 2R is too early; 3R = 60% of the way to TP,
+               sufficient confirmation trade is working
+
+  Time stop at 30 bars:
+    If bars_open >= 30 AND unrealized_r < 0:
+      Close 100% of position at market
+    Rationale: converts large SL losses into smaller time stop losses;
+               sideways losers exit early, reducing avg_loss
+
+  Fast regime exit (Ehlers-based):
+    Exit uses majority-vote Ehlers: any 2 of 3 Ehlers bearish → exit long
+    Exit long  if ehlers_bear_count >= 2
+    Exit short if ehlers_bull_count >= 2
+    Rationale: catches reversals 5–15 bars earlier than slow EMA200/ADX;
+               fast regime is entry-gate only for the opposite direction
+
+  Note: SL/TP are set in MT5 at entry. Regime exit and time stop
+  are applied programmatically by the script each bar close.
+  Trailing stop: DISABLED (tested; hurts PF at all settings)
+  Breakeven stop: DISABLED (cuts avg_win more than avg_loss; PF 1.90→1.83)
+
+
+================================================================
+  SECTION 6 — POSITION SIZING
+================================================================
+
+  Method     : Fixed fractional (ATR-derived, not fixed pips)
+  Formula    : lots = (equity × risk_pct / 100) / (SL_distance × 100)
+               (GOLD contract = 100 troy oz/lot on MT5)
+
+  Live paper : 0.5% equity risk per trade  (backtest used 1.0%)
+  Minimum    : 0.01 lots
+  Maximum    : 50.0 lots
+
+  Short sizing: 0.5× normal (50% of long risk per short trade)
+    Rationale: shorts add diversification/alpha but have higher
+               variance; asymmetric sizing limits drag on equity curve
+
+  Seasonal sizing (April–September):
+    25% of normal size (0.5% × 0.25 = 0.125% effective risk)
+    Rationale: walk-forward shows all 4 failing folds are Q2/Q3;
+               range-bound gold in these months compresses realised RR
+
+
+================================================================
+  SECTION 7 — ENTRY FILTERS (RUNTIME GUARDS)
+================================================================
+
+  1. Vol-adaptive SL multiplier
+     ATR percentile rank over rolling 200-bar window:
+     If ATR_pct > 70th percentile:
+       Scale multiplier from 3.0 down toward 1.5 (floor)
+     Prevents outsized dollar-losses during abnormally volatile regimes
+
+  2. MA(200) trend direction filter (year-round)
+     Block long  if close < MA200
+     Block short if close > MA200
+     Rationale: ADX can be high in a down-trending market (e.g. 2022
+                gold crash). This filter prevents fighting the macro trend.
+
+  3. Seasonal ADX gate (April–September only)
+     Block entry entirely if ADX(14) < 20
+     Rationale: ADX < 20 = no directional trend in weak season →
+                signals fire into chop → deeply negative Sharpe
+
+  4. SL hard cap: $100/oz maximum SL distance
+     Prevents absurdly wide stops at extreme volatility spikes
+
+  5. Session filter: 07:00–19:59 UTC only
+     Outside London+NY: liquidity thin, spreads wide, signals unreliable
+
+
+================================================================
+  SECTION 8 — RISK PARAMETERS (ACTIVE VALUES)
+================================================================
+
+  Parameter                Value   Source
+  ─────────────────────────────────────────────────────────────
+  ATR period               14      risk_config.yaml
+  ATR multiplier (base)    3.0     walk-forward: 7/16 folds
+  ATR multiplier (floor)   1.5     vol_adaptive_min_multiplier
+  Vol-adaptive threshold   70th    vol_adaptive_percentile
+  Max SL distance          $100    max_sl_distance
+  Risk/reward ratio        5.0     risk_config.yaml
+  Partial exit trigger     3.0 R   partial_exit_r
+  Partial exit size        50%     partial_exit_pct
+  Time stop bars           30      time_stop_bars
+  Short size scale         0.5×    short_size_scale
+  Seasonal size scale      0.25×   seasonal_size_scale (Apr–Sep)
+  Seasonal ADX threshold   20.0    seasonal_adx_threshold
+  MA trend filter period   200     trend_filter_period
+  Paper risk per trade     0.5%    PAPER_RISK_PCT (live paper)
+  Backtest risk per trade  1.0%    risk_config.yaml (risk_percentage)
+
+
+================================================================
+  SECTION 9 — DEPLOYMENT STATE
+================================================================
+
+  Phase 1 (CURRENT): Automated Forward Test
+    Script   : run_live_xauusd.py
+    Mode     : Full automation, paper trading, 0.5% risk
+    Platform : Windows + MT5 terminal running
+    Data     : MT5 GOLD H1 (symbol: GOLD, start_pos=1, 3500 bars)
+    State    : live_state.json
+    Signal   : Telegram notifications (trade open/close/partial)
+
+  Phase 2 (PLANNED): Semi-Manual Mode A
+    Script   : run_signal_xauusd.py  (to be created)
+    Mode     : Signal alerts only → manual MT5 execution
+    Platform : Windows (MT5 data) or Linux VPS (OANDA data)
+    Risk     : 0.5% per trade (real money, small size)
+    Gate     : After Phase 1 validates PF >= 1.4 over 30+ trades
+
+  Phase 3 (OPTIONAL): Semi-Manual Mode B
+    Script   : run_signal_xauusd.py  (mode: assisted)
+    Mode     : Signal + /confirm + exit management alerts
+    Requires : python-telegram-bot two-way bot
+
+  Phase 4 (FUTURE): Full Automation via MetaApi
+    Script   : run_signal_xauusd.py  (execution re-enabled)
+    Bridge   : MetaApi cloud → Windows MT5 terminal
+    Gate     : Live PF >= 1.4, live/backtest PF >= 0.70, 30+ trades
+
+
+================================================================
+  SECTION 10 — FILES
+================================================================
+
+  core/signal_engine.py               Signal generation (v5, production)
+  run_live_xauusd.py                  Full automation loop (paper)
+  config/risk_config.yaml             All risk parameters (authoritative)
+  config/strategy_config.yaml         Strategy-level config
+  live_state.json                     Position state (survives restarts)
+  modules/ehlers/mama.py              MAMA/FAMA indicator
+  modules/ehlers/instantaneous_trendline.py  ITrend indicator
+  modules/ehlers/sinewave_indicator.py       EBSW indicator
+  SEMI_MANUAL_ARCHITECTURE.txt        Semi-manual build plan
+
+================================================================
+  END OF DOCUMENT
+================================================================

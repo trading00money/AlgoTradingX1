@@ -228,6 +228,13 @@ def main():
         choices=["live", "backtest", "scanner", "trainer", "optimize"],
         help="The mode to run the application in."
     )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default=None,
+        help="Override backtest symbol (e.g. XAGUSD). Loads symbol-specific "
+             "overrides from backtest_config.yaml and risk_config.yaml."
+    )
     args = parser.parse_args()
 
     # Load all configurations
@@ -242,6 +249,33 @@ def main():
         'ehlers_config': load_config('ehlers_config.yaml'),
         'astro_config': load_config('astro_config.yaml'),
     }
+
+    # Apply symbol-specific overrides (e.g. --symbol XAGUSD)
+    if args.symbol:
+        sym = args.symbol.upper()
+        # Merge backtest_config symbol overrides into flat namespace
+        bt_symbols = config.get('backtest_config', {}).get('symbols', {})
+        if sym in bt_symbols:
+            sym_bt = bt_symbols[sym]
+            for key, val in sym_bt.items():
+                if key != 'symbols':
+                    config['backtest_config'][key] = val
+            logger.info(f"Backtest config: applied {sym} overrides (symbol, instrument, costs)")
+        else:
+            # No symbol section — just override the symbol name
+            config['backtest_config']['symbol'] = sym
+            logger.warning(f"No backtest_config.symbols.{sym} section found — only symbol name overridden")
+
+        # Merge risk_config symbol overrides into flat namespace
+        rk_symbols = config.get('risk_config', {}).get('symbols', {})
+        if sym in rk_symbols:
+            sym_rk = rk_symbols[sym]
+            for key, val in sym_rk.items():
+                if key != 'symbols':
+                    config['risk_config'][key] = val
+            logger.info(f"Risk config: applied {sym} overrides ({len(sym_rk)} keys)")
+        else:
+            logger.warning(f"No risk_config.symbols.{sym} section found — using default risk params")
 
     # Non-critical configs (missing is OK — engines handle absence gracefully)
     _optional_keys = {'ehlers_config', 'astro_config'}

@@ -738,3 +738,153 @@ kelly_advanced:
     tail_risk:
       enabled: true
       reduction_factor: 0.20  # Reduce Kelly by 20% for tail risk
+
+# ================================================================
+# XAGUSD (Silver) - SYMBOL-SPECIFIC RISK OVERRIDES
+# ================================================================
+# These settings apply ONLY to XAGUSD. The XAUUSD flat keys above
+# remain unchanged and continue to govern gold trading.
+#
+# Silver-specific rationale:
+#   - Higher relative volatility (~25-30% annualised vs gold 15-18%)
+#   - More erratic intraday moves → needs wider ATR multiplier
+#   - Strong mean-reversion on sub-daily → shorter time stop horizon
+#   - Lower absolute price ($30 vs $3800) but larger lot size (5000 oz)
+#   - Gold/silver correlation ~0.85 → position sizing must account for
+#     combined exposure when trading both simultaneously
+#   - Seasonal patterns differ: silver weakest Jun-Aug (industrial slowdown),
+#     not the broader Apr-Sep window that plagues gold
+# ================================================================
+# v4: "Mirror Gold" — align with XAUUSD proven parameters.
+# v1-v3 tried silver-specific tweaks (regime gating, lower RR, tighter
+# time stops) but regime exits averaged -$38 while gold's average +$179.
+# Root cause: gold uses legacy regime exit + RR 5.0 + partial at 3.0R,
+# and trades accumulate enough profit BEFORE the flip.  ATR-based stops
+# already auto-adapt to silver's higher volatility, so most "silver-
+# specific" adjustments were fighting the instrument, not helping it.
+# v4 mirrors gold except where instrument physics demands a difference.
+# ================================================================
+symbols:
+  XAGUSD:
+
+    # Seasonal position-size filter ────────────────────────────────────────────
+    # Silver's weak months differ from gold: industrial demand drops in summer,
+    # plus Dec tax-loss selling.  These ARE genuinely different from gold's
+    # Apr-Sep window, so we keep silver-specific months.
+    seasonal_filter_enabled: true
+    seasonal_weak_months: [4, 5, 6, 7, 8, 9]   # v6: mirror gold — Apr-Sep (shared macro sensitivity)
+    seasonal_size_scale: 0.10                 # v7: 10% of normal size in weak months (aggressive filter)
+
+    # Seasonal ADX entry gate ──────────────────────────────────────────────────
+    # Mirror gold: ADX ≥ 20 during weak months.  The 22 threshold in v1-v3
+    # filtered too many entries without improving win rate.
+    seasonal_adx_gate_enabled: true
+    seasonal_adx_threshold: 20.0              # v4: aligned with gold (was 22)
+
+    # MA trend direction filter ────────────────────────────────────────────────
+    # Mirror gold: 200-bar MA.  The 150-bar in v1-v3 whipsawed on silver's
+    # noisy price action, generating false trend signals.
+    trend_filter_enabled: true
+    trend_filter_period: 250                  # v11: 250 protects short PF (1.37 vs 1.21 at 200)
+
+    # Stop loss: ATR-based ─────────────────────────────────────────────────────
+    # Mirror gold: 3.0× ATR.  ATR itself already scales to silver's higher
+    # absolute volatility.  The 3.5× in v1-v3 made risk-per-trade too large,
+    # reducing position sizes and compressing returns.
+    stop_loss_method: "atr"
+    atr_period: 14
+    atr_multiplier: 3.0                       # v6: reverted to gold — 2.5 caused too many SL without PF gain
+
+    # Volatility-adaptive SL ───────────────────────────────────────────────────
+    # Mirror gold: same percentile and floor.  ATR already captures silver's
+    # higher baseline vol — no need for a separate percentile threshold.
+    vol_adaptive_sl: true
+    vol_adaptive_percentile: 70               # v4: aligned with gold (was 75)
+    vol_adaptive_min_multiplier: 1.5          # v4: aligned with gold (was 2.0)
+    max_sl_distance: 3.0                      # Silver-specific: $3/oz cap (gold: $100/oz)
+
+    # High-vol entry filter — require ADX>25 when ATR>80th pctile
+    # Silver's volatile periods produce choppy entries; this gates them
+    high_vol_adx_filter: true                  # v9: enabled for silver (disabled for gold)
+
+    # Take profit ──────────────────────────────────────────────────────────────
+    # v4: RR 5.0 mirrors gold.  Gold's key insight: RR=5.0 is a CEILING, not
+    # a target.  Most trades exit via regime change (at +$179 avg on gold).
+    # The high ceiling lets partial exits capture 3.0R and runners occasionally
+    # hit 5R.  Lowering RR to 3.0 (v2-v3) forced TP exits too early and
+    # compressed the average win.
+    take_profit_method: "rr_ratio"
+    risk_reward_ratio: 5.0                    # v4: aligned with gold (was 3.0)
+
+    # Breakeven stop ───────────────────────────────────────────────────────────
+    # v4: disabled — mirrors gold.  Gold tested BE and it cut avg_win more
+    # than avg_loss (PF 1.90→1.83).  Same dynamic applies to silver: BE at
+    # 1.5R was stopping out trades that needed room to reach partial/TP.
+    breakeven_stop_enabled: false             # v4: disabled (was true in v3)
+    breakeven_activation_r: 1.0
+    breakeven_buffer_r: 0.3
+
+    # Time stop ────────────────────────────────────────────────────────────────
+    # v4: 30 bars mirrors gold.  The 18-bar time stop in v2-v3 was cutting
+    # silver trades before they had time to develop.  Silver trends may be
+    # shorter than gold's, but 18 H1 bars (< 1 day) is too aggressive.
+    # 30 bars ≈ 1.25 days gives trends adequate time to prove themselves.
+    time_stop_enabled: true
+    time_stop_bars: 30                        # v6: reverted to gold — give trends time to develop
+    time_stop_min_r: 0.0                      # Cut any trade still underwater
+
+    # Trailing stop
+    trailing_stop_enabled: false
+    trailing_atr_multiplier: 3.0
+    trailing_activation_r: 1.0
+
+    # Position sizing ──────────────────────────────────────────────────────────
+    # v4: 1.0% mirrors gold.  The 0.75% in v1-v3 directly reduced returns by
+    # 25%.  ATR-based stops already control dollar risk; the fractional sizing
+    # percentage should match gold for comparable return profiles.
+    sizing_method: "fixed_fractional"
+    risk_percentage: 1.5                      # v10: boost returns — silver needs larger sizing to approach gold
+
+    # Vol-adaptive position sizing — reduce size during high-vol regimes
+    # Silver's worst DD occurs during volatile chop; scaling down targets DD
+    vol_adaptive_sizing: true                  # v12: enabled to reduce DD during high-vol
+    vol_sizing_percentile: 70
+    vol_sizing_min_scale: 0.5
+
+    # Smart regime exit ────────────────────────────────────────────────────────
+    # v4: DISABLED — use legacy regime exit (always exit on regime change),
+    # exactly like gold.  Gold's regime exits average +$179 because trades
+    # accumulate profit before the flip.  v1-v3 tried gating regime exits
+    # (0.5R, then 1.0R) but this kept silver trades alive through noisy
+    # transitions where the trend really WAS changing — resulting in avg -$38
+    # to -$66.  The correct fix is letting the higher RR ceiling and partial
+    # exits build profit, then trust the regime signal.
+    regime_exit_min_r: 0.5                    # v15: optimum — 0.3-0.4 too loose, 0.6+ too tight
+
+    # Short-side regime filter
+    short_regime_filter_enabled: false
+
+    # Short-side sizing ────────────────────────────────────────────────────────
+    # v4: 0.5 mirrors gold.  Gold's short PF is 1.65 with 0.5 scale.  The
+    # 0.25 scale in v2-v3 cut short exposure so much that even profitable
+    # shorts contributed negligible alpha.  With the full gold framework
+    # (RR 5.0, partial at 3.0R, legacy regime exit), short quality should
+    # improve enough to justify 0.5x sizing.
+    short_size_scale: 0.3                     # v9: re-enable — shorts provide DD diversification
+
+    # Partial profit exit ──────────────────────────────────────────────────────
+    # v4: 3.0R trigger mirrors gold.  At RR=5.0, 3.0R = 60% of target —
+    # the same proportional sweet spot that works for gold.  The 2.0R trigger
+    # in v2-v3 was paired with RR=3.0 (67%), but at a much lower absolute
+    # profit level.  3.0R partial exits should average significantly higher
+    # per-exit profit.
+    partial_exit_enabled: true
+    partial_exit_r: 2.5                       # v10: earlier partials → more frequent locked-in profits
+    partial_exit_pct: 0.5                     # Close 50% of position
+    partial_exit_move_be: true                # Move remaining stop to breakeven
+
+    # ── Multi-symbol exposure guard ───────────────────────────────────────────
+    multi_symbol:
+      max_combined_precious_metals_risk: 1.5
+      correlation_with_xauusd: 0.85
+      max_concurrent_same_direction: 1
